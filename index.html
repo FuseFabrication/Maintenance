@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fuse Maintenance Log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: dense work-order board. Header with tabs, summary tiles, then scannable rows with status pills. */
+:root{
+  --bg:#eef0f2; --surface:#ffffff; --ink:#1b2530; --muted:#5d6b7a; --line:#d5dae0;
+  --accent:#255c8a; --accent-ink:#ffffff;
+  --bad:#b42318; --bad-bg:#fde8e6; --warn:#8a5a00; --warn-bg:#fff1cf; --ok:#1d6b3c; --ok-bg:#dff3e6;
+  --font-display:"Barlow Condensed","Arial Narrow",sans-serif; --font-body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12171d; --surface:#1b222b; --ink:#e8edf2; --muted:#9aa8b6; --line:#2e3844;
+    --accent:#6aa9dc; --accent-ink:#0c1620;
+    --bad:#ff9d94; --bad-bg:#3d1d1a; --warn:#f3c76a; --warn-bg:#3a2e0f; --ok:#86d6a2; --ok-bg:#16301f;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.4 var(--font-body);min-height:100%}
+h1,h2,h3{font-family:var(--font-display);margin:0;text-wrap:balance;letter-spacing:.01em}
+h1{font-size:1.7rem}
+h2{font-size:1.35rem}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1050px;margin:0 auto;padding:0 16px 48px}
+header.top{background:var(--surface);border-bottom:1px solid var(--line)}
+.top-in{max-width:1050px;margin:0 auto;padding:12px 16px 0;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between}
+.who{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:.9rem}
+nav.tabs{max-width:1050px;margin:0 auto;padding:0 16px;display:flex;gap:4px;overflow-x:auto}
+nav.tabs button{background:none;border:0;border-bottom:3px solid transparent;padding:10px 14px;cursor:pointer;font-weight:600;color:var(--muted);white-space:nowrap}
+nav.tabs button[aria-current="page"]{color:var(--ink);border-bottom-color:var(--accent)}
+.banner{margin:12px 0 0;padding:10px 12px;border:1px solid var(--line);background:var(--warn-bg);color:var(--warn);border-radius:6px;font-size:.92rem}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.tile .n{font:700 2rem/1 var(--font-display);font-variant-numeric:tabular-nums}
+.tile .l{color:var(--muted);font-size:.85rem;margin-top:4px}
+.tile.bad{border-left:5px solid var(--bad)} .tile.warn{border-left:5px solid var(--warn)} .tile.ok{border-left:5px solid var(--ok)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:16px 0 10px}
+.bar .grow{flex:1;min-width:160px}
+input[type=text],input[type=password],input[type=date],input[type=number],select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+textarea{min-height:90px;resize:vertical}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:8px 12px;cursor:pointer;font-weight:600;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.small{padding:5px 9px;font-size:.88rem}
+.btn.danger{color:var(--bad)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.group{margin:18px 0 6px;display:flex;gap:8px;align-items:baseline}
+.group h2{font-size:1.15rem}
+.group .c{color:var(--muted);font-variant-numeric:tabular-nums}
+.list{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.row{display:grid;grid-template-columns:130px 1fr auto;gap:6px 14px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row .main{min-width:0}
+.row .t{font-weight:600}
+.row .s{color:var(--muted);font-size:.88rem}
+.row.click{cursor:pointer}
+.row.click:hover{background:var(--bg)}
+.row.two-col{grid-template-columns:1fr auto}
+.pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:.82rem;font-weight:600;white-space:nowrap}
+.pill.bad{background:var(--bad-bg);color:var(--bad)} .pill.warn{background:var(--warn-bg);color:var(--warn)} .pill.ok{background:var(--ok-bg);color:var(--ok)} .pill.mute{background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+.empty .btn{margin-top:10px}
+.crumb{margin:16px 0 8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px;margin:12px 0}
+.kv{display:flex;flex-wrap:wrap;gap:4px 24px;color:var(--muted);font-size:.92rem;margin-top:6px}
+.sec{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:20px 0 8px;flex-wrap:wrap}
+.logrow{display:grid;grid-template-columns:96px 1fr;gap:4px 14px;padding:10px 14px;border-top:1px solid var(--line)}
+.logrow:first-child{border-top:0}
+.logrow .d{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.9rem}
+.note{color:var(--muted);font-size:.88rem}
+.overlay{position:fixed;inset:0;background:rgba(10,15,20,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px 12px;overflow:auto;z-index:10}
+.modal{background:var(--surface);border:1px solid var(--line);border-radius:10px;width:100%;max-width:460px;padding:18px}
+.modal form,.login form{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+.modal label,.login label{display:flex;flex-direction:column;gap:4px;font-size:.9rem;font-weight:600}
+.modal .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.modal .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
+.err{color:var(--bad);font-size:.9rem;min-height:1.2em}
+.login{max-width:380px;margin:48px auto;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px}
+@media (max-width:640px){
+  .row{grid-template-columns:1fr auto}
+  .row .pillcell{grid-column:1/-1}
+  .logrow{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <h1>Fuse Maintenance Log</h1>
+    <div class="who" id="whoBox" hidden><span>Signed in as <strong id="whoName"></strong></span><button class="btn small" id="outBtn" type="button">Sign out</button></div>
+  </div>
+  <nav class="tabs" aria-label="Sections" id="tabs" hidden>
+    <button type="button" data-tab="due">What's due</button>
+    <button type="button" data-tab="equipment">Equipment</button>
+    <button type="button" data-tab="log">History</button>
+    <button type="button" data-tab="holidays">Holidays</button>
+  </nav>
+</header>
+<main class="wrap" id="app"></main>
+<div id="modalRoot"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="dates.js"></script>
+<script>
+const { pad, iso, parseD, todayStr, diffDays, addInterval, rollWorking, nextDueAfter, usShopHolidays } = FuseDates;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function freqText(t){
+  const k = t.every+' '+t.unit;
+  const names = {'1 day':'Daily (weekdays)','1 week':'Weekly','2 week':'Every 2 weeks','1 month':'Monthly','3 month':'Quarterly','6 month':'Every 6 months','1 year':'Annually'};
+  return names[k] || ('Every '+t.every+' '+t.unit+(t.every>1?'s':''));
+}
+const fmtDate = s => s ? parseD(s).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) : '';
+
+/* ---------- state ---------- */
+const S = { user:null, eq:[], tasks:[], logs:[], holidays:[], tab:'due', sel:null, dueFilter:'soon', q:'', logKind:'all', logQ:'', loaded:false, loadErr:'' };
+let sb = null;
+const cfg = window.FUSE_CONFIG || {};
+const toEmail = u => u.trim().toLowerCase().replace(/[^a-z0-9._-]/g,'') + '@fuse.example.com';
+const holidaySet = () => new Set(S.holidays.map(h => h.day));
+
+/* ---------- data ---------- */
+const chk = res => { if (res.error) throw new Error(res.error.message || 'Database error'); return res.data; };
+async function loadAll(){
+  try {
+    const [e,t,l,h] = await Promise.all([
+      sb.from('equipment').select('*'),
+      sb.from('tasks').select('*'),
+      sb.from('log').select('*').order('created_at',{ascending:false}).limit(500),
+      sb.from('holidays').select('*').order('day')
+    ]);
+    S.eq = chk(e);
+    S.tasks = chk(t).map(r => ({id:r.id, equipId:r.equip_id, name:r.name, every:r.every, unit:r.unit, nextDue:r.next_due, lastDone:r.last_done, lastBy:r.last_by}));
+    S.logs = chk(l).map(r => ({id:r.id, equipId:r.equip_id, equipName:r.equip_name, equipTag:r.equip_tag, taskId:r.task_id, kind:r.kind, title:r.title, notes:r.notes, by:r.done_by, date:r.done_date}));
+    S.holidays = chk(h);
+    S.loadErr = ''; S.loaded = true;
+  } catch(err){ S.loadErr = 'Could not load data: '+err.message; }
+  render();
+}
+let reloadTimer = null;
+const scheduleReload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(loadAll, 300); };
+
+/* ---------- derived ---------- */
+const eqById = id => S.eq.find(e => e.id === id);
+function taskStatus(t){
+  const d = diffDays(t.nextDue, todayStr());
+  if (d < 0) return {cls:'bad', label:(-d)+' day'+(d===-1?'':'s')+' overdue', rank:0};
+  if (d === 0) return {cls:'warn', label:'Due today', rank:1};
+  if (d <= 7) return {cls:'warn', label:'Due in '+d+' day'+(d===1?'':'s'), rank:2};
+  return {cls:'ok', label:'Due '+fmtDate(t.nextDue), rank:3};
+}
+
+/* ---------- modal ---------- */
+function openModal(title, bodyHtml, submitLabel, onSubmit, opts={}){
+  const root = $('#modalRoot');
+  root.innerHTML = '<div class="overlay" id="ov"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="mt"><h2 id="mt">'+esc(title)+'</h2><form id="mf">'+bodyHtml+
+    '<div class="err" id="merr" role="alert"></div><div class="acts"><button type="button" class="btn" id="mcancel">Cancel</button>'+
+    '<button type="submit" class="btn '+(opts.danger?'danger':'primary')+'" id="msub">'+esc(submitLabel)+'</button></div></form></div></div>';
+  const close = () => { root.innerHTML = ''; };
+  $('#mcancel').onclick = close;
+  $('#ov').addEventListener('mousedown', e => { if (e.target.id === 'ov') close(); });
+  const first = root.querySelector('input:not([type=hidden]),select,textarea'); if (first) first.focus();
+  $('#mf').onsubmit = async e => {
+    e.preventDefault();
+    const btn = $('#msub'); btn.disabled = true; $('#merr').textContent = '';
+    try { await onSubmit(new FormData(e.target)); close(); await loadAll(); }
+    catch(err){ $('#merr').textContent = err && err.message ? err.message : 'Could not save. Try again.'; btn.disabled = false; }
+  };
+}
+
+/* ---------- actions ---------- */
+const who = () => S.user ? S.user.email.split('@')[0] : '';
+async function addEquipment(f){
+  const name = (f.get('name')||'').trim(); if (!name) throw new Error('Equipment name is required.');
+  chk(await sb.from('equipment').insert({ name, tag:(f.get('tag')||'').trim(), category:(f.get('category')||'').trim(), location:(f.get('location')||'').trim(), notes:(f.get('notes')||'').trim() }));
+}
+async function importEquipment(f){
+  const lines = (f.get('list')||'').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) throw new Error('Paste at least one line.');
+  const have = new Set(S.eq.map(e => (e.name+'|'+e.tag).toLowerCase()));
+  const rows = [];
+  for (const line of lines){
+    const p = (line.includes('\t') ? line.split('\t') : line.split(',')).map(x => x.trim());
+    if (!p[0] || /^name$/i.test(p[0])) continue;
+    const rec = { name:p[0], tag:p[1]||'', category:p[2]||'', location:p[3]||'' };
+    const key = (rec.name+'|'+rec.tag).toLowerCase();
+    if (have.has(key)) continue; have.add(key); rows.push(rec);
+  }
+  if (!rows.length) throw new Error('Nothing new to add. Those items are already in the list.');
+  chk(await sb.from('equipment').insert(rows));
+}
+async function addTask(eqId, f){
+  const name = (f.get('name')||'').trim(); if (!name) throw new Error('Task name is required.');
+  const every = parseInt(f.get('every'),10); if (!(every > 0)) throw new Error('Enter how often (a number of 1 or more).');
+  const unit = f.get('unit');
+  const first = f.get('nextDue') || addInterval(todayStr(), every, unit);
+  chk(await sb.from('tasks').insert({ equip_id:eqId, name, every, unit, next_due:rollWorking(first, holidaySet()) }));
+}
+async function completeTask(t, f){
+  const date = f.get('date'); if (!date) throw new Error('Pick the date it was done.');
+  if (date > todayStr()) throw new Error('The date cannot be in the future.');
+  const e = eqById(t.equipId);
+  chk(await sb.from('log').insert({ equip_id:t.equipId, equip_name:e?e.name:'(removed)', equip_tag:e?e.tag:'', task_id:t.id, kind:'scheduled', title:t.name, notes:(f.get('notes')||'').trim(), done_by:who(), done_date:date }));
+  if (!(t.lastDone && t.lastDone > date))
+    chk(await sb.from('tasks').update({ last_done:date, last_by:who(), next_due:nextDueAfter(date, t.every, t.unit, holidaySet()) }).eq('id', t.id));
+}
+async function logRepair(e, f){
+  const title = (f.get('title')||'').trim(); if (!title) throw new Error('Describe the work.');
+  const date = f.get('date'); if (!date) throw new Error('Pick a date.');
+  chk(await sb.from('log').insert({ equip_id:e.id, equip_name:e.name, equip_tag:e.tag||'', kind:f.get('kind')||'repair', title, notes:(f.get('notes')||'').trim(), done_by:who(), done_date:date }));
+}
+const removeTask = async t => chk(await sb.from('tasks').delete().eq('id', t.id));
+const removeEquipment = async e => chk(await sb.from('equipment').delete().eq('id', e.id));
+async function addHoliday(f){
+  const day = f.get('day'), name = (f.get('name')||'').trim();
+  if (!day) throw new Error('Pick a date.'); if (!name) throw new Error('Enter a name.');
+  chk(await sb.from('holidays').upsert({ day, name }, { onConflict:'day' }));
+}
+async function addCommonHolidays(f){
+  const y = parseInt(f.get('year'),10); if (!(y >= 2020 && y <= 2100)) throw new Error('Enter a year like 2027.');
+  chk(await sb.from('holidays').upsert(usShopHolidays(y), { onConflict:'day' }));
+}
+const removeHoliday = async day => chk(await sb.from('holidays').delete().eq('day', day));
+
+/* ---------- modals ---------- */
+const mAddEquipment = () => openModal('Add equipment',
+  '<label>Name<input type="text" name="name" required></label><div class="two"><label>Tag / asset number<input type="text" name="tag"></label><label>Category<input type="text" name="category" placeholder="Press brake, Laser, Welder..."></label></div><label>Location<input type="text" name="location" placeholder="Bay, cell or building"></label><label>Notes<textarea name="notes"></textarea></label>', 'Add equipment', addEquipment);
+const mImport = () => openModal('Import equipment list',
+  '<p class="note">One machine per line: Name, Tag, Category, Location. Commas or tabs both work, so you can paste rows straight from Excel. Only the name is required. Duplicates are skipped.</p><label>List<textarea name="list" style="min-height:170px" placeholder="Accurpress 250 Ton, PB-01, Press brake, Bay 2"></textarea></label>', 'Import', importEquipment);
+const mAddTask = e => openModal('Add a maintenance task for '+e.name,
+  '<label>Task<input type="text" name="name" placeholder="Grease ram guides" required></label><div class="two"><label>Repeats every<input type="number" name="every" min="1" value="1" required></label><label>Unit<select name="unit"><option value="day">day(s)</option><option value="week" selected>week(s)</option><option value="month">month(s)</option><option value="year">year(s)</option></select></label></div><label>First due date<input type="date" name="nextDue" value="'+todayStr()+'"></label><p class="note">Due dates that land on a weekend or a listed holiday move to the next working day. Presets: daily = 1 day, weekly = 1 week, monthly = 1 month, quarterly = 3 months, annual = 1 year.</p>', 'Add task', f => addTask(e.id, f));
+const mComplete = t => { const e = eqById(t.equipId);
+  openModal('Mark done: '+t.name, '<p class="note">'+esc(e?e.name:'')+(e&&e.tag?' ('+esc(e.tag)+')':'')+'. Logged as '+esc(who())+'.</p><label>Date done<input type="date" name="date" value="'+todayStr()+'" max="'+todayStr()+'" required></label><label>Notes (optional)<textarea name="notes" placeholder="Parts used, findings, readings"></textarea></label>', 'Record as done', f => completeTask(t, f)); };
+const mRepair = e => openModal('Log other work on '+e.name,
+  '<label>Type<select name="kind"><option value="repair">Repair / breakdown</option><option value="other">Other work</option></select></label><label>What was done<input type="text" name="title" required></label><label>Date<input type="date" name="date" value="'+todayStr()+'" max="'+todayStr()+'" required></label><label>Notes (optional)<textarea name="notes" placeholder="Cause, parts, downtime"></textarea></label>', 'Save entry', f => logRepair(e, f));
+const mConfirm = (title, text, label, fn) => openModal(title, '<p>'+esc(text)+'</p>', label, async () => { await fn(); }, {danger:true});
+const mAddHoliday = () => openModal('Add a holiday', '<label>Date<input type="date" name="day" required></label><label>Name<input type="text" name="name" placeholder="Plant shutdown" required></label>', 'Add holiday', addHoliday);
+const mCommonHolidays = () => openModal('Add common US holidays', '<label>Year<input type="number" name="year" value="'+(new Date().getFullYear()+1)+'" min="2020" max="2100"></label><p class="note">Adds New Year\'s Day, Memorial Day, Independence Day, Labor Day, Thanksgiving, the day after Thanksgiving and Christmas Day. Edit the list afterward to match your shop calendar.</p>', 'Add holidays', addCommonHolidays);
+
+/* ---------- views ---------- */
+function banner(){ return S.loadErr ? '<div class="banner">'+esc(S.loadErr)+'</div>' : ''; }
+function taskRows(list){
+  return list.map(t => {
+    const st = taskStatus(t), e = eqById(t.equipId);
+    return '<div class="row"><div class="pillcell"><span class="pill '+st.cls+'">'+esc(st.label)+'</span></div><div class="main"><div class="t">'+esc(t.name)+'</div><div class="s">'+
+      esc(e?e.name:'(removed equipment)')+(e&&e.tag?' · '+esc(e.tag):'')+' · '+esc(freqText(t))+' · due '+esc(fmtDate(t.nextDue))+
+      (t.lastDone?' · last done '+esc(fmtDate(t.lastDone))+(t.lastBy?' by '+esc(t.lastBy):''):' · never logged')+'</div></div><div><button class="btn small primary" data-done="'+esc(t.id)+'">Mark done</button></div></div>';
+  }).join('');
+}
+function viewDue(){
+  const tasks = S.tasks.filter(t => eqById(t.equipId)).map(t => ({...t, st:taskStatus(t)})).sort((a,b) => a.nextDue.localeCompare(b.nextDue));
+  const over = tasks.filter(t => t.st.rank === 0), soon = tasks.filter(t => t.st.rank === 1 || t.st.rank === 2), later = tasks.filter(t => t.st.rank === 3);
+  const weekAgo = iso(new Date(Date.now()-6*864e5));
+  let h = banner() + '<div class="tiles"><div class="tile bad"><div class="n">'+over.length+'</div><div class="l">Overdue</div></div><div class="tile warn"><div class="n">'+soon.length+'</div><div class="l">Due in the next 7 days</div></div><div class="tile ok"><div class="n">'+S.logs.filter(l => l.date >= weekAgo).length+'</div><div class="l">Logged in the last 7 days</div></div><div class="tile"><div class="n">'+S.eq.length+'</div><div class="l">Pieces of equipment</div></div></div>';
+  if (!S.eq.length) return h + '<div class="list"><div class="empty">No equipment yet.<br>Add your equipment first, then give each machine its maintenance tasks.<br><button class="btn primary" data-go="equipment">Go to equipment</button></div></div>';
+  if (!tasks.length) return h + '<div class="list"><div class="empty">No maintenance tasks are scheduled yet.<br>Open a piece of equipment and use "Add task".<br><button class="btn primary" data-go="equipment">Go to equipment</button></div></div>';
+  h += '<div class="bar"><div><label for="dueF" class="note" style="display:block">Show</label><select id="dueF"><option value="soon"'+(S.dueFilter==='soon'?' selected':'')+'>Overdue and next 7 days</option><option value="all"'+(S.dueFilter==='all'?' selected':'')+'>Everything scheduled</option></select></div></div>';
+  const sect = (title, arr) => arr.length ? '<div class="group"><h2>'+title+'</h2><span class="c">'+arr.length+'</span></div><div class="list">'+taskRows(arr)+'</div>' : '';
+  h += sect('Overdue', over) + sect('Due soon', soon);
+  if (S.dueFilter === 'all') h += sect('Later', later);
+  if (!over.length && !soon.length && S.dueFilter === 'soon') h += '<div class="list"><div class="empty">Nothing is overdue or due this week.</div></div>';
+  return h;
+}
+const kindLabel = {scheduled:'Scheduled', repair:'Repair', other:'Other'};
+const logRow = showEq => l => '<div class="logrow"><div class="d">'+esc(fmtDate(l.date))+'</div><div><div style="font-weight:600">'+esc(l.title)+' <span class="pill mute">'+esc(kindLabel[l.kind]||l.kind)+'</span></div><div class="note">'+(showEq?esc(l.equipName)+(l.equipTag?' · '+esc(l.equipTag):'')+' · ':'')+'by '+esc(l.by||'unknown')+'</div>'+(l.notes?'<div>'+esc(l.notes)+'</div>':'')+'</div></div>';
+function viewEquipment(){
+  if (S.sel){
+    const e = eqById(S.sel);
+    if (!e){ S.sel = null; return viewEquipment(); }
+    const ts = S.tasks.filter(t => t.equipId === e.id).sort((a,b) => a.nextDue.localeCompare(b.nextDue));
+    const hist = S.logs.filter(l => l.equipId === e.id);
+    let h = banner() + '<div class="crumb"><button class="btn small" data-back="1">Back to equipment</button></div>';
+    h += '<div class="card"><h2>'+esc(e.name)+'</h2><div class="kv">'+(e.tag?'<span>Tag: '+esc(e.tag)+'</span>':'')+(e.category?'<span>'+esc(e.category)+'</span>':'')+(e.location?'<span>Location: '+esc(e.location)+'</span>':'')+'</div>'+(e.notes?'<p>'+esc(e.notes)+'</p>':'')+
+      '<div class="bar" style="margin-bottom:0"><button class="btn primary" data-addtask="1">Add task</button><button class="btn" data-repair="1">Log repair or other work</button><span class="grow"></span><button class="btn danger small" data-rmeq="1">Remove equipment</button></div></div>';
+    h += '<div class="sec"><h2>Scheduled maintenance</h2></div>';
+    h += ts.length ? '<div class="list">'+ts.map(t => { const st = taskStatus(t);
+      return '<div class="row"><div class="pillcell"><span class="pill '+st.cls+'">'+esc(st.label)+'</span></div><div class="main"><div class="t">'+esc(t.name)+'</div><div class="s">'+esc(freqText(t))+' · due '+esc(fmtDate(t.nextDue))+(t.lastDone?' · last done '+esc(fmtDate(t.lastDone))+(t.lastBy?' by '+esc(t.lastBy):''):' · never logged')+'</div></div><div style="display:flex;gap:6px"><button class="btn small primary" data-done="'+esc(t.id)+'">Mark done</button><button class="btn small danger" data-rmtask="'+esc(t.id)+'">Remove</button></div></div>'; }).join('')+'</div>' : '<div class="list"><div class="empty">No tasks yet for this equipment.</div></div>';
+    h += '<div class="sec"><h2>History</h2></div>';
+    h += hist.length ? '<div class="list">'+hist.map(logRow(false)).join('')+'</div>' : '<div class="list"><div class="empty">Nothing logged yet.</div></div>';
+    return h;
+  }
+  const q = S.q.trim().toLowerCase();
+  const list = S.eq.filter(e => !q || [e.name,e.tag,e.category,e.location].join(' ').toLowerCase().includes(q)).sort((a,b) => a.name.localeCompare(b.name));
+  let h = banner() + '<div class="bar"><div class="grow"><label class="note" for="eqq" style="display:block">Search equipment</label><input type="text" id="eqq" value="'+esc(S.q)+'" placeholder="Name, tag, category or location"></div><button class="btn primary" data-addeq="1">Add equipment</button><button class="btn" data-import="1">Import list</button></div>';
+  if (!S.eq.length) return h + '<div class="list"><div class="empty">No equipment yet. Add one machine, or import your list.</div></div>';
+  if (!list.length) return h + '<div class="list"><div class="empty">No equipment matches that search.</div></div>';
+  return h + '<div class="list">'+list.map(e => {
+    const ts = S.tasks.filter(t => t.equipId === e.id), od = ts.filter(t => taskStatus(t).rank === 0).length;
+    return '<div class="row two-col click" tabindex="0" role="button" data-open="'+esc(e.id)+'"><div class="main"><div class="t">'+esc(e.name)+'</div><div class="s">'+[e.tag,e.category,e.location].filter(Boolean).map(esc).join(' · ')+'</div></div><div>'+(od?'<span class="pill bad">'+od+' overdue</span>':(ts.length?'<span class="pill ok">'+ts.length+' task'+(ts.length>1?'s':'')+'</span>':'<span class="pill mute">No tasks</span>'))+'</div></div>';
+  }).join('')+'</div>';
+}
+function viewLog(){
+  const q = S.logQ.trim().toLowerCase();
+  const list = S.logs.filter(l => (S.logKind === 'all' || l.kind === S.logKind) && (!q || [l.equipName,l.equipTag,l.title,l.by,l.notes].join(' ').toLowerCase().includes(q)));
+  let h = banner() + '<div class="bar"><div class="grow"><label class="note" for="lq" style="display:block">Search history</label><input type="text" id="lq" value="'+esc(S.logQ)+'" placeholder="Equipment, work, person or notes"></div><div><label class="note" for="lk" style="display:block">Type</label><select id="lk"><option value="all">All</option><option value="scheduled"'+(S.logKind==='scheduled'?' selected':'')+'>Scheduled</option><option value="repair"'+(S.logKind==='repair'?' selected':'')+'>Repairs</option><option value="other"'+(S.logKind==='other'?' selected':'')+'>Other</option></select></div></div>';
+  return h + (list.length ? '<div class="list">'+list.map(logRow(true)).join('')+'</div><p class="note">Shows the most recent 500 entries.</p>' : '<div class="list"><div class="empty">'+(S.logs.length?'No entries match.':'Nothing has been logged yet.')+'</div></div>');
+}
+function viewHolidays(){
+  let h = banner() + '<p class="note" style="margin-top:16px">Due dates never land on a weekend or a day listed here. They move to the next working day.</p><div class="bar"><button class="btn primary" data-addhol="1">Add holiday</button><button class="btn" data-commonhol="1">Add common US holidays</button></div>';
+  if (!S.holidays.length) return h + '<div class="list"><div class="empty">No holidays listed. Weekends are already skipped.</div></div>';
+  const t = todayStr();
+  return h + '<div class="list">'+S.holidays.map(x => '<div class="row two-col"><div class="main"><div class="t">'+esc(x.name)+'</div><div class="s">'+esc(parseD(x.day).toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}))+(x.day < t?' · past':'')+'</div></div><div><button class="btn small danger" data-rmhol="'+esc(x.day)+'">Remove</button></div></div>').join('')+'</div>';
+}
+function viewLogin(){
+  return '<div class="login"><h2>Sign in</h2><form id="lf"><label>Username<input type="text" id="lu" autocomplete="username" autocapitalize="none" required></label><label>Password<input type="password" id="lp" autocomplete="current-password" required></label><div class="err" id="le" role="alert"></div><button class="btn primary" type="submit" id="lb">Sign in</button></form></div>';
+}
+function render(){
+  const app = $('#app'), signed = !!S.user;
+  $('#whoBox').hidden = !signed; $('#tabs').hidden = !signed;
+  if (signed) $('#whoName').textContent = who();
+  document.querySelectorAll('nav.tabs button').forEach(b => b.dataset.tab === S.tab ? b.setAttribute('aria-current','page') : b.removeAttribute('aria-current'));
+  if (!cfg.url || !cfg.anonKey){ app.innerHTML = '<div class="login"><h2>Not set up yet</h2><p>Open config.js and fill in the Supabase URL and anon key.</p></div>'; return; }
+  if (!signed){ app.innerHTML = viewLogin(); const f = $('#lf'); if (f) f.onsubmit = onLogin; return; }
+  if (!S.loaded && !S.loadErr){ app.innerHTML = '<p class="note" style="margin-top:24px">Loading...</p>'; return; }
+  const a = document.activeElement, fid = a && a.id, pos = a && a.selectionStart;
+  app.innerHTML = S.tab === 'due' ? viewDue() : S.tab === 'equipment' ? viewEquipment() : S.tab === 'log' ? viewLog() : viewHolidays();
+  if (fid === 'eqq' || fid === 'lq'){ const el = document.getElementById(fid); if (el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} } }
+}
+
+/* ---------- events ---------- */
+async function onLogin(e){
+  e.preventDefault();
+  const btn = $('#lb'); btn.disabled = true; $('#le').textContent = '';
+  const { error } = await sb.auth.signInWithPassword({ email:toEmail($('#lu').value), password:$('#lp').value });
+  if (error){ $('#le').textContent = 'Wrong username or password.'; btn.disabled = false; }
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-tab],[data-go],[data-done],[data-open],[data-back],[data-addeq],[data-import],[data-addtask],[data-repair],[data-rmeq],[data-rmtask],[data-addhol],[data-commonhol],[data-rmhol]');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.tab || d.go){ S.tab = d.tab || d.go; S.sel = null; try{ history.replaceState(null,'','#'+S.tab); }catch(x){} render(); return; }
+  if (d.done){ const task = S.tasks.find(x => x.id === d.done); if (task) mComplete(task); return; }
+  if (d.open){ S.sel = d.open; render(); window.scrollTo(0,0); return; }
+  if (d.back){ S.sel = null; render(); return; }
+  if (d.addeq) return mAddEquipment();
+  if (d.import) return mImport();
+  if (d.addhol) return mAddHoliday();
+  if (d.commonhol) return mCommonHolidays();
+  if (d.rmhol){ const hd = S.holidays.find(x => x.day === d.rmhol); if (hd) mConfirm('Remove '+hd.name+'?', 'Existing due dates stay as they are. Future due dates will no longer skip this day.', 'Remove', () => removeHoliday(hd.day)); return; }
+  const eq = S.sel && eqById(S.sel);
+  if (d.addtask && eq) return mAddTask(eq);
+  if (d.repair && eq) return mRepair(eq);
+  if (d.rmeq && eq) return mConfirm('Remove '+eq.name+'?', 'This removes the equipment and all of its scheduled tasks. Past history entries stay in the log.', 'Remove', async () => { await removeEquipment(eq); S.sel = null; });
+  if (d.rmtask){ const task = S.tasks.find(x => x.id === d.rmtask); if (task) mConfirm('Remove task "'+task.name+'"?', 'Past history entries for it stay in the log.', 'Remove', () => removeTask(task)); }
+});
+document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[data-open]')){ e.preventDefault(); e.target.click(); } });
+document.addEventListener('input', e => {
+  if (e.target.id === 'eqq'){ S.q = e.target.value; render(); }
+  if (e.target.id === 'lq'){ S.logQ = e.target.value; render(); }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'dueF'){ S.dueFilter = e.target.value; render(); }
+  if (e.target.id === 'lk'){ S.logKind = e.target.value; render(); }
+});
+$('#outBtn').onclick = () => sb.auth.signOut();
+const readHash = () => { const h = location.hash.slice(1); if (['due','equipment','log','holidays'].includes(h)) S.tab = h; };
+window.addEventListener('hashchange', () => { readHash(); S.sel = null; render(); });
+
+/* ---------- start ---------- */
+(function start(){
+  readHash();
+  if (!cfg.url || !cfg.anonKey || !window.supabase){ render(); return; }
+  sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+  sb.auth.onAuthStateChange((evt, session) => {
+    const was = !!S.user;
+    S.user = session ? session.user : null;
+    if (S.user && !was){ S.loaded = false; render(); loadAll(); sb.channel('fuse-live').on('postgres_changes', { event:'*', schema:'public' }, scheduleReload).subscribe(); }
+    else if (!S.user){ sb.removeAllChannels(); S.eq = []; S.tasks = []; S.logs = []; S.holidays = []; S.loaded = false; render(); }
+  });
+  render();
+})();
+</script>
+</body>
+</html>
