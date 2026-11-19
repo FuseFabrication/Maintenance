@@ -61,5 +61,9 @@ create policy "shop users" on tasks     for all to authenticated using (true) wi
 create policy "shop users" on log       for all to authenticated using (true) with check (true);
 create policy "shop users" on holidays  for all to authenticated using (true) with check (true);
 
+-- Let signed-in users use the tables (the policies above then decide what they can touch).
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on equipment, tasks, log, holidays to authenticated;
+
 -- Live updates between screens.
 alter publication supabase_realtime add table equipment, tasks, log, holidays;
