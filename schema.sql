@@ -132,6 +132,10 @@ create table if not exists public.assets (
   created_at    timestamptz not null default now()
 );
 
+-- Position on the shop floor map, in feet (same coordinates as shop-layout.svg).
+alter table public.assets add column if not exists map_x real;
+alter table public.assets add column if not exists map_y real;
+
 -- Other departments that use a machine (cranes, forklifts, compressors...).
 create table if not exists public.asset_departments (
   asset_id   text not null references public.assets(id) on update cascade on delete cascade,
