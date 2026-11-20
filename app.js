@@ -215,7 +215,7 @@ window.addEventListener('hashchange', render);
 function officeShell(active, body, badge) {
   const nav = [
     ['/dash', 'Dashboard'], ['/machines', 'Machines'], ['/departments', 'Departments'],
-    ['/exceptions', 'Exceptions'], ['/floor', 'Shop floor (tablet)'],
+    ['/exceptions', 'Exceptions'], ['/map', 'Shop floor map'], ['/floor', 'Tablet check-in'],
   ];
   if (isSup()) nav.push(['/admin', 'Admin']);
   return `<div class="office">
@@ -237,6 +237,7 @@ function floorShell(back, body) {
     </div>
     <div class="row" style="gap:16px">
       ${w ? `<span class="who">Working as <b>${esc(w.name)}</b></span><button type="button" class="link" data-notyou>Not you?</button>` : ''}
+      ${currentPath() !== '/map' ? '<a href="#/map">Shop map</a>' : '<a href="#/floor/pick">Machine list</a>'}
       ${isSup() || profile.role !== 'tablet' ? '<a href="#/dash">Office view</a>' : ''}
       ${!w ? '<button type="button" class="link" data-signout>Sign out tablet</button>' : ''}
     </div>
@@ -326,7 +327,7 @@ route('/dash', async () => {
 
   const body = `
   <div class="head"><div><h1>Dashboard</h1><p class="muted" style="margin:4px 0 0">${fmtDate(shopToday())}</p></div>
-    <div class="row"><a class="btn" href="#/exceptions">Exceptions</a><a class="btn primary" href="#/floor">Open shop-floor view</a></div></div>
+    <div class="row"><a class="btn" href="#/exceptions">Exceptions</a><a class="btn" href="#/floor">Tablet check-in</a><a class="btn primary" href="#/map">Shop floor map</a></div></div>
   <section class="grid g4" aria-label="Today at a glance">
     <div class="card tile"><span class="small muted">Machines down</span><span class="n t-bad">${down.length}</span><span class="small muted">${limited.length} more running limited</span></div>
     <div class="card tile"><span class="small muted">Daily checks left today</span><span class="n">${dailyLeft}</span><span class="small muted">of ${dailyDue.length} due today</span></div>
@@ -841,6 +842,261 @@ route('/admin/asset/([^/?]+)', async (aid) => {
   });
 }, { sup: true });
 
+// ---------------------------------------------------------------- shop floor map
+// Zoomable, clickable layout (shop-layout.svg, 1 unit = 1 ft). Pins come from assets.map_x / map_y.
+let layoutSvgText = null;
+const PIN = {
+  down: { fill: '#991B1B', label: 'Down' },
+  limited: { fill: '#EAB308', label: 'Limited' },
+  due: { fill: '#C2410C', label: 'Daily check due' },
+  done: { fill: '#166534', label: 'Checked today' },
+  none: { fill: '#94A3B8', label: 'No daily check due' },
+};
+function pinState(a) {
+  if (a.status === 'down') return 'down';
+  if (a.status === 'limited') return 'limited';
+  const st = dailyState(a).st;
+  if (st === 'due') return 'due';
+  if (st === 'done') return 'done';
+  return 'none';
+}
+
+route('/map', async () => {
+  app.innerHTML = floorShell('', '<div class="loading">Loading map…</div>');
+  await loadCore();
+  if (!layoutSvgText) {
+    const r = await fetch('shop-layout.svg', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('Could not load shop-layout.svg');
+    layoutSvgText = await r.text();
+  }
+  const hasCols = core.assets.length && 'map_x' in core.assets[0];
+  const qs = query();
+  let dept = qs.has('dept') ? qs.get('dept') : tabletDept();
+  let editing = qs.get('edit') === '1' && isSup();
+  let selected = qs.get('focus') || null;   // machine id shown in the card
+  let placing = null;                        // machine id being placed (edit mode)
+  const placed = () => activeAssets().filter((a) => a.map_x != null && a.map_y != null);
+
+  const body = `
+  <div class="row" style="justify-content:space-between;align-items:flex-end">
+    <div><h1>Shop floor</h1><p class="muted" style="margin:6px 0 0">Tap a machine to log maintenance. Pinch or scroll to zoom, drag to move.</p></div>
+    <div class="row">
+      <label class="small">Department<select id="mdept"><option value="">All</option>${core.depts.map((d) => `<option ${d === dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
+      <form id="mfind" class="row" style="gap:6px;align-items:flex-end"><label class="small">Find<input name="t" placeholder="Tag, e.g. PB-001" style="width:150px;text-transform:uppercase"></label><button class="btn" type="submit">Go</button></form>
+      ${isSup() ? `<button class="btn ${editing ? 'dark' : ''}" type="button" id="medit">${editing ? 'Done placing' : 'Place machines'}</button>` : ''}
+    </div>
+  </div>
+  ${hasCols ? '' : '<div class="err">The map positions aren\'t set up in the database yet. Run <b>supabase/shop_map.sql</b> in the Supabase SQL Editor.</div>'}
+  <div style="position:relative">
+    <div id="mapbox" style="aspect-ratio:2.2/1;max-height:74vh;min-height:340px;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;touch-action:none;cursor:grab;user-select:none"></div>
+    <div class="row" style="position:absolute;right:12px;top:12px;gap:6px;flex-direction:column">
+      <button class="btn" type="button" id="zin" aria-label="Zoom in" style="width:48px;padding:0;font-size:22px">+</button>
+      <button class="btn" type="button" id="zout" aria-label="Zoom out" style="width:48px;padding:0;font-size:22px">−</button>
+      <button class="btn" type="button" id="zfit" aria-label="Show whole shop" style="width:48px;padding:0;font-size:12px">Fit</button>
+    </div>
+  </div>
+  <div class="row small" style="gap:16px;margin-top:-8px">
+      ${Object.values(PIN).map((p) => `<span class="row" style="gap:6px"><span style="width:14px;height:14px;border-radius:999px;background:${p.fill};border:2px solid #fff;box-shadow:0 0 0 1px #94A3B8;display:inline-block"></span>${p.label}</span>`).join('')}
+  </div>
+  <div id="mcard"></div>
+  <div id="medpanel"></div>`;
+  app.innerHTML = floorShell('', body);
+  $('.fmain').style.maxWidth = '1600px';
+
+  const box = $('#mapbox');
+  box.innerHTML = layoutSvgText;
+  const svg = $('svg', box);
+  svg.removeAttribute('style');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '100%');
+  svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+  const base = svg.getAttribute('viewBox').split(/\s+/).map(Number);
+  const NS = 'http://www.w3.org/2000/svg';
+  const pinLayer = document.createElementNS(NS, 'g');
+  pinLayer.id = 'pins';
+  svg.appendChild(pinLayer);
+  const ghost = document.createElementNS(NS, 'circle');   // preview while placing
+  ghost.setAttribute('fill', 'none'); ghost.setAttribute('stroke', '#C2410C'); ghost.setAttribute('stroke-dasharray', '2 2'); ghost.style.display = 'none';
+  svg.appendChild(ghost);
+
+  // --- view box (keeps the box's aspect ratio so 1 ft is square)
+  let vb = { x: base[0], y: base[1], w: base[2], h: base[3] };
+  const scale = () => box.clientWidth / vb.w;           // pixels per foot
+  function apply() {
+    if (!box.isConnected || !box.clientWidth || !box.clientHeight) return;   // page changed or hidden
+    vb.h = vb.w * (box.clientHeight / box.clientWidth);
+    svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+    drawPins();
+  }
+  function fit() {
+    if (!box.clientWidth) return;
+    const r = box.clientHeight / box.clientWidth;
+    vb.w = Math.max(base[2], base[3] / r);
+    vb.x = base[0] - (vb.w - base[2]) / 2;
+    vb.y = base[1] - (vb.w * r - base[3]) / 2;
+    apply();
+  }
+  function zoomAt(f, px, py) {   // f < 1 zooms in; (px, py) = screen point that stays put
+    const s = scale();
+    const fx = vb.x + px / s, fy = vb.y + py / s;
+    vb.w = Math.min(Math.max(vb.w * f, 20), base[2] * 1.6);
+    const s2 = box.clientWidth / vb.w;
+    vb.x = fx - px / s2; vb.y = fy - py / s2;
+    apply();
+  }
+  function centerOn(a, w) {
+    vb.w = w || 70;
+    const r = box.clientHeight / box.clientWidth;
+    vb.x = a.map_x - vb.w / 2; vb.y = a.map_y - (vb.w * r) / 2;
+    apply();
+  }
+  const toFt = (cx, cy) => { const b = box.getBoundingClientRect(); const s = scale(); return { x: vb.x + (cx - b.left) / s, y: vb.y + (cy - b.top) / s }; };
+
+  // --- pins
+  function drawPins() {
+    const s = scale();
+    const r = Math.max(7 / s, 1.2), showLabels = s >= 4.5;
+    const fs = 11 / s;
+    pinLayer.innerHTML = '';
+    placed().forEach((a) => {
+      const inDept = !dept || a.department === dept || a.shared.includes(dept);
+      const st = PIN[pinState(a)];
+      const g = document.createElementNS(NS, 'g');
+      g.setAttribute('transform', `translate(${a.map_x} ${a.map_y})`);
+      g.setAttribute('opacity', inDept ? '1' : '0.25');
+      const sel = a.id === selected || a.id === placing;
+      g.innerHTML = `${sel ? `<circle r="${r * 1.9}" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}
+        <circle r="${r}" fill="${st.fill}" stroke="#1C1F23" stroke-opacity=".35" stroke-width="${1.5 / s}"/>
+        ${showLabels || sel ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
+      pinLayer.appendChild(g);
+    });
+  }
+  function nearestPin(pt) {
+    const s = scale(); let best = null, bd = Infinity;
+    placed().forEach((a) => { const d = Math.hypot(a.map_x - pt.x, a.map_y - pt.y) * s; if (d < bd) { bd = d; best = a; } });
+    return bd <= 26 ? best : null;   // within 26 px of the finger
+  }
+
+  // --- card for the tapped machine
+  function showCard() {
+    const a = selected && core.assetById[selected];
+    if (!a) { $('#mcard').innerHTML = ''; return; }
+    const ds = dailyState(a);
+    const other = a.checks.filter((c) => c.frequency !== 'daily' && c.state === 'due');
+    $('#mcard').innerHTML = `<div class="card row" style="justify-content:space-between;gap:16px">
+      <div class="stack" style="gap:4px"><div class="row" style="gap:10px"><b style="font-size:19px">${esc(a.id)} · ${esc(a.name)}</b>${statusChip(a.status)}</div>
+        <span class="small muted">${esc([a.department, a.shared.length ? 'shared with ' + a.shared.join(', ') : ''].filter(Boolean).join(' · '))}</span>
+        <span class="small ${ds.cls}" style="font-weight:600">${esc(ds.text)}${other.length ? ' · ' + other.map((c) => FREQ[c.frequency]).join(', ') + ' due' : ''}</span></div>
+      <div class="row"><a class="btn primary big" href="#/m/${encodeURIComponent(a.id)}">Log maintenance</a>
+        ${profile.role !== 'tablet' ? `<a class="btn big" href="#/machine/${encodeURIComponent(a.id)}">Details</a>` : ''}</div></div>`;
+  }
+
+  // --- placing (supervisors)
+  function drawEditPanel() {
+    if (!editing) { $('#medpanel').innerHTML = ''; ghost.style.display = 'none'; return; }
+    const list = activeAssets().slice().sort((x, y) => (x.map_x == null ? 0 : 1) - (y.map_x == null ? 0 : 1) || (x.id < y.id ? -1 : 1));
+    const un = list.filter((a) => a.map_x == null).length;
+    $('#medpanel').innerHTML = `<section class="card stack"><h2 style="margin:0">Place machines</h2>
+      <p class="small muted" style="margin:0">${placing ? `Tap the map where <b>${esc(placing)}</b> goes.` : 'Pick a machine, then tap the map where it sits. Tapping a pin picks that machine so you can move it.'} ${un} not placed yet.</p>
+      ${placing && core.assetById[placing].map_x != null ? `<button class="btn sm danger" type="button" id="munplace" style="align-self:flex-start">Take ${esc(placing)} off the map</button>` : ''}
+      <div class="row" style="gap:8px">${list.map((a) => `<button type="button" class="pill" data-place="${esc(a.id)}" aria-pressed="${a.id === placing}" title="${esc(a.name)}">${a.map_x == null ? '● ' : ''}${esc(a.id.replace(/^FUSE-/, ''))}</button>`).join('')}</div>
+      <span class="tiny muted">● = not on the map yet</span></section>`;
+    $$('[data-place]').forEach((b) => b.addEventListener('click', () => { placing = b.dataset.place; selected = null; showCard(); drawEditPanel(); drawPins(); const a = core.assetById[placing]; if (a.map_x != null) centerOn(a, Math.min(vb.w, 120)); }));
+    const un2 = $('#munplace');
+    if (un2) un2.addEventListener('click', () => busy(un2, async () => {
+      await q(sb.from('assets').update({ map_x: null, map_y: null }).eq('id', placing));
+      core.assetById[placing].map_x = null; core.assetById[placing].map_y = null;
+      toast(placing + ' taken off the map'); placing = null; drawEditPanel(); drawPins();
+    }));
+  }
+  async function placeAt(pt) {
+    const id = placing;
+    const x = Math.round(pt.x * 10) / 10, y = Math.round(pt.y * 10) / 10;
+    try {
+      await q(sb.from('assets').update({ map_x: x, map_y: y }).eq('id', id));
+      core.assetById[id].map_x = x; core.assetById[id].map_y = y;
+      toast(`${id} placed`);
+      placing = null; drawEditPanel(); drawPins();
+    } catch (e) { toast(errMsg(e), true); }
+  }
+
+  // --- pointer: drag to pan, pinch / wheel to zoom, tap to pick
+  const pts = new Map(); let drag = null, pinch = null, moved = false;
+  box.addEventListener('pointerdown', (e) => {
+    box.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) { drag = { x: e.clientX, y: e.clientY, vx: vb.x, vy: vb.y }; moved = false; box.style.cursor = 'grabbing'; }
+    if (pts.size === 2) {
+      const [p1, p2] = [...pts.values()];
+      const b = box.getBoundingClientRect();
+      pinch = { d: Math.hypot(p1.x - p2.x, p1.y - p2.y), w: vb.w, cx: (p1.x + p2.x) / 2 - b.left, cy: (p1.y + p2.y) / 2 - b.top, f: toFt((p1.x + p2.x) / 2, (p1.y + p2.y) / 2) };
+      moved = true;
+    }
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (editing && placing && pts.size === 0) {
+      const pt = toFt(e.clientX, e.clientY), s = scale();
+      ghost.setAttribute('cx', pt.x); ghost.setAttribute('cy', pt.y); ghost.setAttribute('r', 10 / s); ghost.setAttribute('stroke-width', 2 / s); ghost.style.display = '';
+    }
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size >= 2 && pinch) {
+      const [p1, p2] = [...pts.values()];
+      const d = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+      vb.w = Math.min(Math.max(pinch.w * pinch.d / d, 20), base[2] * 1.6);
+      const s2 = box.clientWidth / vb.w;
+      vb.x = pinch.f.x - pinch.cx / s2; vb.y = pinch.f.y - pinch.cy / s2;
+      apply();
+    } else if (drag) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+      if (moved) { const s = scale(); vb.x = drag.vx - dx / s; vb.y = drag.vy - dy / s; apply(); }
+    }
+  });
+  const end = (e) => {
+    const wasTap = pts.size === 1 && !moved && pts.has(e.pointerId);
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (pts.size === 0) { drag = null; box.style.cursor = 'grab'; }
+    if (!wasTap) return;
+    const pt = toFt(e.clientX, e.clientY);
+    const hit = nearestPin(pt);
+    if (editing) {
+      if (placing && (!hit || hit.id === placing)) { placeAt(pt); return; }
+      if (hit) { placing = hit.id; drawEditPanel(); drawPins(); }
+      return;
+    }
+    selected = hit ? hit.id : null;
+    showCard(); drawPins();
+    if (hit) $('#mcard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', (e) => { pts.delete(e.pointerId); pinch = null; drag = null; });
+  box.addEventListener('pointerleave', () => { ghost.style.display = 'none'; });
+  box.addEventListener('wheel', (e) => { e.preventDefault(); const b = box.getBoundingClientRect(); zoomAt(e.deltaY > 0 ? 1.15 : 1 / 1.15, e.clientX - b.left, e.clientY - b.top); }, { passive: false });
+  $('#zin').addEventListener('click', () => zoomAt(1 / 1.5, box.clientWidth / 2, box.clientHeight / 2));
+  $('#zout').addEventListener('click', () => zoomAt(1.5, box.clientWidth / 2, box.clientHeight / 2));
+  $('#zfit').addEventListener('click', fit);
+  $('#mdept').addEventListener('change', (e) => { dept = e.target.value; drawPins(); });
+  $('#mfind').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const t = formData(e.target).t.toUpperCase().replace(/\s+/g, '');
+    const a = core.assetById[t] || core.assetById['FUSE-' + t] || core.assets.find((x) => (x.cpa_id || '').toUpperCase() === t);
+    if (!a) { toast(`No machine with tag ${t}`, true); return; }
+    if (a.map_x == null) { toast(`${a.id} isn't on the map yet`, true); return; }
+    selected = a.id; showCard(); centerOn(a, 70);
+  });
+  const eb = $('#medit');
+  if (eb) eb.addEventListener('click', () => { editing = !editing; placing = null; eb.textContent = editing ? 'Done placing' : 'Place machines'; eb.classList.toggle('dark', editing); drawEditPanel(); drawPins(); });
+  if (window.__mapResize) window.removeEventListener('resize', window.__mapResize);
+  window.__mapResize = () => { if (box.isConnected) apply(); };
+  window.addEventListener('resize', window.__mapResize);
+
+  fit();
+  if (selected && core.assetById[selected] && core.assetById[selected].map_x != null) centerOn(core.assetById[selected], 70);
+  showCard(); drawEditPanel();
+});
+
 // ================================================================== SHOP FLOOR (tablet)
 
 // Who's working?
@@ -908,7 +1164,8 @@ route('/floor/pick', async () => {
   const doneN = list.filter((a) => dailyState(a).st === 'done').length;
   const dueN = list.filter((a) => ['done', 'due', 'skipped'].includes(dailyState(a).st)).length;
   const body = `
-  <div><h1>What are you checking?</h1><p class="muted" style="margin:6px 0 0">Type the machine tag or tap the machine. Scanning the QR label on the machine with the tablet camera works too.</p></div>
+  <div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>What are you checking?</h1><p class="muted" style="margin:6px 0 0">Type the machine tag, tap the machine, or find it on the shop map. Scanning the QR label on the machine with the tablet camera works too.</p></div>
+  <a class="btn primary big" href="#/map">Pick on the shop map</a></div>
   <form id="tagf" class="card row"><label for="tag" style="flex:1 1 260px">Machine tag<input id="tag" name="tag" placeholder="e.g. PB-001 or FUSE-PB-001" autocomplete="off" style="height:56px;font-size:19px;text-transform:uppercase"></label><button class="btn dark big" type="submit" style="align-self:flex-end;height:56px">Go</button></form>
   <div class="row" style="justify-content:space-between"><h2>${esc(dept || 'All machines')}</h2><span class="small muted">${dueN ? `${doneN} of ${dueN} daily checks done today` : ''}</span></div>
   <div class="tiles">${list.map((a) => {

@@ -4,7 +4,14 @@ Maintenance logging for the machines at Fuse Fabrication. It's a static website 
 
 ## What it does
 
-**Shop floor (shared tablets)**
+**Shop floor map**
+- **Clickable layout.** "Shop floor map" (on the dashboard and in the menu) opens a to-scale drawing of the building, with a dot on every machine.
+- **Dot colors.** Dark red means down, yellow means limited, orange means the daily check is due, green means it's been checked today, and grey means no daily check is due.
+- **Moving around.** Pinch or scroll to zoom, drag to move, or use + / − / Fit. Find jumps to a tag, and the department picker fades out the other departments' machines.
+- **Picking a machine.** Tap a dot to bring up that machine, then tap **Log maintenance**. If nobody has picked their name yet, the tablet asks for it first.
+- **Placing machines.** Supervisors use **Place machines** to put a machine on the map or move it: pick the machine, then tap the spot. The drawing is `shop-layout.svg`, where 1 unit = 1 foot, west is at the bottom and north is on the left.
+
+**Shop floor (shared tablets): Tablet check-in**
 - **Who's doing the maintenance?** Each person taps their name before logging anything. After 10 minutes without a tap, the tablet returns to this screen.
 - **Pick a machine.** Type the tag (for example `PB-001`), tap the machine's tile, or scan its QR label with the tablet camera.
 - **Run a checklist.** Each item gets a big Yes / No answer, and a No needs a note. If anything fails, the tablet asks whether the machine can still run.
@@ -38,6 +45,8 @@ Maintenance logging for the machines at Fuse Fabrication. It's a static website 
 | `config.js` | Supabase URL and publishable key, time zone, tablet timeout |
 | `supabase/schema.sql` | Database tables, rules and views |
 | `supabase/seed.sql` | Starting data: 9 departments, 50 machines, the Mazak daily checklist |
+| `supabase/shop_map.sql` | Map position columns, plus where each machine sits on the map |
+| `shop-layout.svg` | The shop floor drawing, traced from ExistingBuilding.idw |
 
 ## Setup
 
@@ -46,6 +55,8 @@ Upload these files to the repo, replacing the old ones. Delete `dates.js`, which
 
 ### 2. Database (one time)
 In Supabase, open **SQL Editor → New query**. Paste all of `supabase/schema.sql` and click **Run**. Then do the same with `supabase/seed.sql`.
+
+For the shop floor map, also run `supabase/shop_map.sql`. It only fills in positions that are empty, so it never moves a machine you've placed by hand.
 
 `schema.sql` removes the first version's `equipment`, `tasks` and `log` tables, which were empty, and keeps `holidays`. Both files are safe to run again.
 
