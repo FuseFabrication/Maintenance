@@ -221,7 +221,7 @@ function officeShell(active, body, badge) {
   if (isSup()) nav.push(['/admin', 'Admin']);
   return `<div class="office">
   <nav class="side" aria-label="Main">
-    <div class="brand"><div class="logo">${ICON}</div><div><b>Fuse Fabrication</b><span>Maintenance</span></div></div>
+    <div class="brand"><a href="#/dash" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a><span>Maintenance</span></div>
     ${nav.map(([h, t]) => `<a href="#${h}" class="${active === h ? 'on' : ''}">${t}${h === '/exceptions' && badge ? `<span class="chip c-warn">${badge}</span>` : ''}</a>`).join('')}
     <div class="foot"><span>${esc(session.user.email)} · ${esc(profile.role)}</span><button type="button" data-signout>Sign out</button></div>
   </nav>
@@ -232,9 +232,8 @@ function floorShell(back, body) {
   return `<div class="floor">
   <header class="fhead">
     <div class="row" style="gap:14px">
-      <div class="logo">${ICON}</div>
-      <div><div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px">Fuse Fabrication</div>
-      <div class="tiny" style="color:#D6D3D1">${esc(tabletDept() ? tabletDept() + ' tablet' : 'Shop floor')}</div></div>
+      <a href="#/floor" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a>
+      <div class="tiny" style="color:#D6D3D1">${esc(tabletDept() ? tabletDept() + ' tablet' : 'Shop floor')}</div>
     </div>
     <div class="row" style="gap:16px">
       ${w ? `<span class="who">Working as <b>${esc(w.name)}</b></span><button type="button" class="link" data-notyou>Not you?</button>` : ''}
