@@ -1293,7 +1293,7 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
 
 function doneScreen(id, msg) {
   app.innerHTML = floorShell('', `<div class="card stack" style="align-items:flex-start"><h1 class="t-ok">Done</h1><p style="margin:0;font-size:17px">${esc(msg)}</p>
-    <div class="row"><a class="btn primary big" href="#/floor/pick">Next machine</a><a class="btn big" href="#/m/${encodeURIComponent(id)}">Back to ${esc(id)}</a></div></div>`);
+    <div class="row"><a class="btn primary big" href="#/floor">Main screen</a><a class="btn big" href="#/m/${encodeURIComponent(id)}">Back to ${esc(id)}</a></div></div>`);
 }
 
 // Skip a check
