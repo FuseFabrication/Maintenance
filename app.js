@@ -808,6 +808,67 @@ route('/exceptions', async () => {
   }));
 });
 
+
+// ---------------------------------------------------------------- reports
+route('/reports', async () => {
+  app.innerHTML = officeShell('/reports', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const qs = query();
+  const today = shopToday();
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-CA');
+  const f = { from: qs.get('from') || monthAgo, to: qs.get('to') || today, dept: qs.get('dept') || '', asset: qs.get('asset') || '', freq: qs.get('freq') || '', group: qs.get('group') || '', result: qs.get('result') || '' };
+  const LIMIT = 5000;
+  let b = sb.from('inspections').select('id,checklist_id,asset_id,frequency,revision,period_start,performed_by,performed_at,result,notes')
+    .gte('performed_at', f.from + 'T00:00:00').lte('performed_at', f.to + 'T23:59:59.999')
+    .order('performed_at', { ascending: false }).limit(LIMIT);
+  if (f.freq) b = b.eq('frequency', f.freq);
+  if (f.asset) b = b.eq('asset_id', f.asset);
+  if (f.result) b = b.eq('result', f.result);
+  const [r, cls] = await Promise.all([b, q(sb.from('checklists').select('id,doc_id,title,assigned_group'))]);
+  if (r.error) throw r.error;
+  const clById = {}; cls.forEach((c) => { clById[c.id] = c; });
+  let rows = r.data.map((x) => ({ ...x, a: core.assetById[x.asset_id] || {}, c: clById[x.checklist_id] || {} }));
+  if (f.dept) rows = rows.filter((x) => x.a.department === f.dept || (x.a.shared || []).includes(f.dept));
+  if (f.group) rows = rows.filter((x) => x.c.assigned_group === f.group);
+  const fails = rows.filter((x) => x.result === 'fail').length;
+  const people = {}; rows.forEach((x) => { people[x.performed_by] = (people[x.performed_by] || 0) + 1; });
+  const machines = new Set(rows.map((x) => x.asset_id)).size;
+  const sel = (name, opts, val, label) => `<label class="sr" for="r-${name}">${label}</label><select id="r-${name}" name="${name}">${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  const body = `
+  <div class="head"><div><h1>Reports</h1><p class="muted" style="margin:4px 0 0">Every completed check: what was done, when, and by whom. Skipped and missed checks are on the Exceptions page.</p></div>
+    <button class="btn" type="button" id="csv">Export CSV</button></div>
+  <section class="grid g4">
+    <div class="card tile"><span class="small muted">Checks completed</span><span class="n">${rows.length}</span><span class="small muted">${fmtShort(f.from)} to ${fmtShort(f.to)}</span></div>
+    <div class="card tile"><span class="small muted">Machines covered</span><span class="n">${machines}</span></div>
+    <div class="card tile"><span class="small muted">With a failed item</span><span class="n ${fails ? 't-bad' : ''}">${fails}</span></div>
+    <div class="card tile"><span class="small muted">People</span><span class="n">${Object.keys(people).length}</span></div>
+  </section>
+  <form id="rf" class="row">
+    <label>From<input type="date" name="from" value="${f.from}"></label>
+    <label>To<input type="date" name="to" value="${f.to}"></label>
+    ${sel('dept', [['', 'All departments'], ...core.depts.map((d) => [d, d])], f.dept, 'Department')}
+    ${sel('asset', [['', 'All machines'], ...core.assets.map((a) => [a.id, a.id + ' · ' + a.name])], f.asset, 'Machine')}
+    ${sel('freq', [['', 'All frequencies'], ...FREQ_ORDER.map((x) => [x, FREQ[x]])], f.freq, 'Frequency')}
+    ${sel('group', [['', 'Floor and maintenance'], ['floor', 'Floor'], ['maintenance', 'Maintenance']], f.group, 'Done by group')}
+    ${sel('result', [['', 'Any result'], ['pass', 'Pass'], ['fail', 'Failed item']], f.result, 'Result')}
+  </form>
+  ${r.data.length >= LIMIT ? `<p class="notice">Showing the most recent ${LIMIT} records. Narrow the dates to see the rest.</p>` : ''}
+  <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Done</th><th>Machine</th><th>Check</th><th>Frequency</th><th>By</th><th>Result</th><th>Notes</th></tr></thead><tbody>
+  ${rows.map((x) => `<tr><td style="white-space:nowrap">${esc(fmtTime(x.performed_at))}</td>
+    <td><a class="tag" href="#/machine/${encodeURIComponent(x.asset_id)}" style="text-decoration:none">${esc(x.asset_id)}</a><div class="tiny muted">${esc(x.a.name || '')}</div></td>
+    <td>${esc(x.c.title || '')}<div class="tiny muted">${esc(x.c.doc_id || '')} · rev ${esc(x.revision ?? '')}</div></td>
+    <td>${esc(FREQ[x.frequency] || x.frequency)}</td><td class="small">${esc(x.performed_by)}</td>
+    <td>${chip(x.result === 'fail' ? 'Failed item' : 'Pass', x.result === 'fail' ? 'c-bad' : 'c-ok')}</td>
+    <td class="small" style="max-width:260px">${esc(x.notes || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:28px;text-align:center">No completed checks match these filters.</td></tr>'}
+  </tbody></table></div></section>`;
+  app.innerHTML = officeShell('/reports', body);
+  $$('#rf select, #rf input').forEach((s) => s.addEventListener('change', () => {
+    location.hash = '#/reports?' + new URLSearchParams(formData($('#rf')));
+  }));
+  $('#csv').addEventListener('click', () => csvDownload(`completed-checks-${f.from}-to-${f.to}.csv`, [['Done at', 'Machine ID', 'Machine', 'Department', 'Checklist', 'Document', 'Revision', 'Frequency', 'Done by group', 'Done by', 'Period start', 'Result', 'Notes'],
+    ...rows.map((x) => [fmtTime(x.performed_at), x.asset_id, x.a.name || '', x.a.department || '', x.c.title || '', x.c.doc_id || '', x.revision ?? '', FREQ[x.frequency] || x.frequency, x.c.assigned_group || '', x.performed_by, x.period_start, x.result === 'fail' ? 'Failed item' : 'Pass', x.notes || ''])]));
+}, { sup: true });
+
 // ---------------------------------------------------------------- admin
 route('/admin(?:/(people|checklists|machines|holidays|logins))?', async (tab) => {
   tab = tab || 'checklists';
