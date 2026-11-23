@@ -13,8 +13,8 @@ const app = document.getElementById('app');
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const FREQ = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', semiannual: 'Semi-annual', annual: 'Annual' };
-const FREQ_ORDER = ['daily', 'weekly', 'monthly', 'semiannual', 'annual'];
+const FREQ = { daily: 'Daily', weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly', quarterly: 'Quarterly', semiannual: 'Semi-annual', annual: 'Annual' };
+const FREQ_ORDER = ['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'semiannual', 'annual'];
 const STATUS = { running: 'Running', limited: 'Limited', down: 'Down', retired: 'Retired' };
 const STATUS_CHIP = { running: 'c-ok', limited: 'c-warn', down: 'c-bad', retired: 'c-grey' };
 const SKIP_REASONS = { machine_down: 'Machine is down', not_in_use: "Machine isn't being used", no_time: 'No time / short staffed', missing_parts: 'Missing parts or tools', other: 'Other' };
@@ -217,6 +217,7 @@ function officeShell(active, body, badge) {
     ['/dash', 'Dashboard'], ['/machines', 'Machines'], ['/departments', 'Departments'],
     ['/exceptions', 'Exceptions'], ['/map', 'Shop floor map'], ['/floor', 'Tablet check-in'],
   ];
+  if (isSup()) nav.push(['/outside', 'Outside inspections']);
   if (isSup()) nav.push(['/admin', 'Admin']);
   return `<div class="office">
   <nav class="side" aria-label="Main">
@@ -287,13 +288,17 @@ function renderLogin() {
 route('/dash', async () => {
   app.innerHTML = officeShell('/dash', '<div class="loading">Loading…</div>');
   await loadCore();
-  const [exc, insp, skips, probs, logs] = await Promise.all([
+  const [exc, insp, skips, probs, logs, outPlans] = await Promise.all([
     q(sb.from('v_exceptions').select('*').eq('review_status', 'needs_review').order('occurred_at', { ascending: false })),
     q(sb.from('inspections').select('id,asset_id,performed_by,performed_at,result,frequency').order('performed_at', { ascending: false }).limit(10)),
     q(sb.from('skips').select('id,asset_id,reported_by,created_at,reason,frequency').order('created_at', { ascending: false }).limit(6)),
     q(sb.from('problems').select('id,asset_id,reported_by,created_at,new_status,description').order('created_at', { ascending: false }).limit(6)),
     q(sb.from('maintenance_logs').select('id,asset_id,done_by,created_at,kind,title').order('created_at', { ascending: false }).limit(6)),
+    q(sb.from('outside_service_plans').select('id,asset_id,service,next_due').eq('active', true)),
   ]);
+  const outLate = outPlans.filter((x) => outsideStatus(x.next_due).rank === 0);
+  const outSoon = outPlans.filter((x) => outsideStatus(x.next_due).rank === 2);
+  const outNoDate = outPlans.filter((x) => outsideStatus(x.next_due).rank === 1);
   const act = activeAssets();
   const down = act.filter((a) => a.status === 'down'), limited = act.filter((a) => a.status === 'limited');
   const dailyDue = core.status.filter((s) => s.frequency === 'daily' && s.due_this_period);
@@ -328,6 +333,7 @@ route('/dash', async () => {
   const body = `
   <div class="head"><div><h1>Dashboard</h1><p class="muted" style="margin:4px 0 0">${fmtDate(shopToday())}</p></div>
     <div class="row"><a class="btn" href="#/exceptions">Exceptions</a><a class="btn" href="#/floor">Tablet check-in</a><a class="btn primary" href="#/map">Shop floor map</a></div></div>
+  ${outLate.length || outSoon.length || outNoDate.length ? `<div class="notice"><b>Outside inspections:</b> ${[outLate.length ? `<span class="t-bad" style="font-weight:700">${outLate.length} overdue</span>` : '', outSoon.length ? `${outSoon.length} due within 60 days` : '', outNoDate.length ? `${outNoDate.length} with no due date set` : ''].filter(Boolean).join(' · ')}${isSup() ? ` · <a href="#/outside">Open</a>` : ''}</div>` : ''}
   <section class="grid g4" aria-label="Today at a glance">
     <div class="card tile"><span class="small muted">Machines down</span><span class="n t-bad">${down.length}</span><span class="small muted">${limited.length} more running limited</span></div>
     <div class="card tile"><span class="small muted">Daily checks left today</span><span class="n">${dailyLeft}</span><span class="small muted">of ${dailyDue.length} due today</span></div>
@@ -358,6 +364,161 @@ route('/dash', async () => {
   </section>`;
   app.innerHTML = officeShell('/dash', body, exc.length);
 });
+
+// ---------------------------------------------------------------- outside inspections
+const REPORT_BUCKET = 'service-reports';
+function dayDiff(a, b) {
+  const t = (x) => { const [y, m, d] = String(x).slice(0, 10).split('-').map(Number); return Date.UTC(y, m - 1, d); };
+  return Math.round((t(a) - t(b)) / 864e5);
+}
+function outsideStatus(nextDue) {
+  if (!nextDue) return { text: 'No date set', cls: 'c-grey', rank: 1 };
+  const n = dayDiff(nextDue, shopToday());
+  if (n < 0) return { text: `Overdue ${-n} day${n === -1 ? '' : 's'}`, cls: 'c-bad', rank: 0 };
+  if (n <= 60) return { text: n === 0 ? 'Due today' : `Due in ${n} day${n === 1 ? '' : 's'}`, cls: 'c-warn', rank: 2 };
+  return { text: 'OK', cls: 'c-ok', rank: 3 };
+}
+async function openReport(path) {
+  const { data, error } = await sb.storage.from(REPORT_BUCKET).createSignedUrl(path, 3600);
+  if (error) { toast(errMsg(error), true); return; }
+  const w = window.open('about:blank', '_blank');
+  if (w) { w.opener = null; w.location.href = data.signedUrl; } else { location.href = data.signedUrl; }
+}
+function wireReportLinks() {
+  $$('[data-report]').forEach((b) => b.addEventListener('click', () => openReport(b.dataset.report)));
+}
+
+route('/outside', async () => {
+  app.innerHTML = officeShell('/outside', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const [plans, recs] = await Promise.all([
+    q(sb.from('outside_service_plans').select('*').eq('active', true).order('asset_id')),
+    q(sb.from('outside_service_records').select('*').order('performed_on', { ascending: false })),
+  ]);
+  const last = {};
+  recs.forEach((r) => { if (!last[r.plan_id]) last[r.plan_id] = r; });
+  const rows = plans.map((p) => ({ p, l: last[p.id], st: outsideStatus(p.next_due) }))
+    .sort((a, b) => a.st.rank - b.st.rank || String(a.p.next_due || '9').localeCompare(String(b.p.next_due || '9')) || (a.p.asset_id < b.p.asset_id ? -1 : 1));
+  const nm = (id) => (core.assetById[id] ? core.assetById[id].name : '');
+  const opts = core.assets.filter((a) => a.status !== 'retired').map((a) => `<option value="${esc(a.id)}">${esc(a.id)} · ${esc(a.name)}</option>`).join('');
+  app.innerHTML = officeShell('/outside', `
+  <div class="head"><div><h1>Outside inspections</h1><p class="muted" style="margin:4px 0 0">Inspections done by an outside company. Log each visit and attach the vendor's report.</p></div>
+    <div class="row"><a class="btn primary" href="#/outside/log">Log a visit</a></div></div>
+  <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Machine</th><th>Service</th><th>Vendor</th><th>Last done</th><th>Next due</th><th></th></tr></thead><tbody>
+  ${rows.map(({ p, l, st }) => `<tr>
+    <td><span class="tag">${esc(p.asset_id)}</span><div class="small muted">${esc(nm(p.asset_id))}</div></td>
+    <td>${esc(p.service)}</td>
+    <td>${p.vendor ? esc(p.vendor) : '<span class="muted">Not set</span>'}</td>
+    <td>${l ? `${fmtDate(l.performed_on)}${l.result === 'fail' ? ' ' + chip('Failed', 'c-bad') : ''}${l.report_path ? `<div><button type="button" class="btn sm" data-report="${esc(l.report_path)}">Open report</button></div>` : '<div class="small muted">No report attached</div>'}` : '<span class="muted">Never logged</span>'}</td>
+    <td>${p.next_due ? fmtDate(p.next_due) : '<span class="muted">—</span>'}<div>${chip(st.text, st.cls)}</div></td>
+    <td><div class="row" style="gap:8px"><a class="btn sm primary" href="#/outside/log?plan=${p.id}">Log visit</a><a class="btn sm" href="#/outside/plan/${p.id}">Details</a></div></td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nothing set up yet.</td></tr>'}
+  </tbody></table></div></section>
+  <section class="card"><h2>Add an outside service</h2>
+    <form id="np" class="row" style="align-items:flex-end">
+      <label style="flex:1 1 260px">Machine<select name="asset_id" required><option value="">Choose…</option>${opts}</select></label>
+      <label style="flex:1 1 260px">Service<input name="service" required placeholder="e.g. Annual inspection (outside company)"></label>
+      <label style="flex:1 1 160px">Vendor<input name="vendor"></label>
+      <label style="width:130px">Every (months)<input name="interval_months" type="number" min="1" value="12" required></label>
+      <label>Next due<input name="next_due" type="date"></label>
+      <button class="btn primary" type="submit">Add</button></form></section>`);
+  wireReportLinks();
+  $('#np').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    busy($('button', e.target), async () => {
+      await q(sb.from('outside_service_plans').insert({ asset_id: f.asset_id, service: f.service, vendor: f.vendor || '', interval_months: Number(f.interval_months) || 12, next_due: f.next_due || null }));
+      toast('Added');
+      render();
+    });
+  });
+}, { sup: true });
+
+route('/outside/log', async () => {
+  app.innerHTML = officeShell('/outside', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const plans = await q(sb.from('outside_service_plans').select('*').eq('active', true).order('asset_id'));
+  const pre = query().get('plan') || '';
+  const first = plans.find((p) => p.id === pre);
+  const nm = (id) => (core.assetById[id] ? core.assetById[id].name : '');
+  app.innerHTML = officeShell('/outside', `
+  <div class="head"><div><h1>Log an outside inspection</h1><p class="muted" style="margin:4px 0 0">One report can cover several machines. Tick each one the visit covered and the report is attached to all of them.</p></div>
+    <div class="row"><a class="btn" href="#/outside">Cancel</a></div></div>
+  <form id="lf" class="card stack">
+    <fieldset class="stack" style="border:0;padding:0;margin:0"><legend style="font-weight:600;font-size:14px;margin-bottom:6px">Machines covered</legend>
+    ${plans.map((p) => `<label style="flex-direction:row;align-items:center;gap:10px;font-weight:500"><input type="checkbox" name="plan" value="${p.id}" ${p.id === pre ? 'checked' : ''} style="height:20px;width:20px"><span><b>${esc(p.asset_id)}</b> · ${esc(nm(p.asset_id))} <span class="muted small">· ${esc(p.service)}</span></span></label>`).join('') || '<p class="muted">No outside services set up yet.</p>'}
+    </fieldset>
+    <div class="grid g3">
+      <label>Date of inspection<input type="date" name="performed_on" value="${shopToday()}" max="${shopToday()}" required></label>
+      <label>Vendor<input name="vendor" value="${esc(first ? first.vendor : '')}" placeholder="Company that did the inspection"></label>
+      <label>Result<select name="result"><option value="pass">Passed</option><option value="fail">Failed / needs repair</option></select></label>
+    </div>
+    <label>Vendor's report (PDF or photo, up to 25 MB)<input type="file" name="report" accept="application/pdf,image/jpeg,image/png"></label>
+    <label>Notes<textarea name="notes" rows="3" placeholder="Anything the report found, repairs needed, certificate numbers…"></textarea></label>
+    <label>Recorded by<input name="recorded_by" required value="${esc(profile.display_name)}"></label>
+    <p class="small muted" style="margin:0">Saving a passed inspection sets the next due date automatically. A failed inspection keeps the current due date until a passing one is logged.</p>
+    <div class="row"><button class="btn primary big" type="submit">Save</button></div>
+  </form>`);
+  $('#lf').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const f = formData(form);
+    const ids = $$('input[name="plan"]:checked', form).map((x) => x.value);
+    if (!ids.length) { toast('Tick at least one machine', true); return; }
+    const file = form.report.files[0];
+    if (file && file.size > 25 * 1024 * 1024) { toast('That file is over 25 MB', true); return; }
+    busy($('button[type="submit"]', form), async () => {
+      let path = null, fname = null;
+      if (file) {
+        fname = file.name;
+        const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-80);
+        path = `${f.performed_on.slice(0, 4)}/${crypto.randomUUID()}-${safe}`;
+        const { error } = await sb.storage.from(REPORT_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });
+        if (error) throw error;
+      }
+      await q(sb.from('outside_service_records').insert(ids.map((id) => ({ plan_id: id, performed_on: f.performed_on, vendor: f.vendor || '', report_path: path, report_name: fname, result: f.result, notes: f.notes || '', recorded_by: f.recorded_by }))));
+      toast(`Saved for ${ids.length} machine${ids.length > 1 ? 's' : ''}`);
+      location.hash = '#/outside';
+    });
+  });
+}, { sup: true });
+
+route('/outside/plan/([0-9a-f-]{36})', async (pid) => {
+  app.innerHTML = officeShell('/outside', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const [p] = await q(sb.from('outside_service_plans').select('*').eq('id', pid));
+  if (!p) { app.innerHTML = officeShell('/outside', '<div class="err">Not found.</div>'); return; }
+  const recs = await q(sb.from('outside_service_records').select('*').eq('plan_id', pid).order('performed_on', { ascending: false }));
+  const a = core.assetById[p.asset_id];
+  const st = outsideStatus(p.next_due);
+  app.innerHTML = officeShell('/outside', `
+  <div class="head"><div><h1>${esc(p.asset_id)} · ${esc(p.service)}</h1><p class="muted" style="margin:4px 0 0">${esc(a ? a.name : '')} ${chip(st.text, st.cls)}</p></div>
+    <div class="row"><a class="btn" href="#/outside">Back</a><a class="btn primary" href="#/outside/log?plan=${p.id}">Log visit</a></div></div>
+  <form id="pf" class="card stack">
+    <div class="grid g3">
+      <label>Vendor<input name="vendor" value="${esc(p.vendor)}"></label>
+      <label>Every (months)<input name="interval_months" type="number" min="1" value="${p.interval_months}" required></label>
+      <label>Next due<input name="next_due" type="date" value="${esc(p.next_due || '')}"></label>
+    </div>
+    <label>Notes<textarea name="notes" rows="2">${esc(p.notes)}</textarea></label>
+    <label style="flex-direction:row;align-items:center;gap:10px;font-weight:500"><input type="checkbox" name="active" ${p.active ? 'checked' : ''} style="height:20px;width:20px">Active (untick if this service is no longer needed)</label>
+    <div class="row"><button class="btn primary" type="submit">Save changes</button></div>
+  </form>
+  <section class="card flush"><div style="padding:18px 22px 6px"><h2>History</h2></div><div class="tablewrap"><table><thead><tr><th>Date</th><th>Vendor</th><th>Result</th><th>Report</th><th>Notes</th><th>Logged by</th></tr></thead><tbody>
+  ${recs.map((r) => `<tr><td>${fmtDate(r.performed_on)}</td><td>${esc(r.vendor)}</td><td>${chip(r.result === 'fail' ? 'Failed' : 'Passed', r.result === 'fail' ? 'c-bad' : 'c-ok')}</td>
+    <td>${r.report_path ? `<button type="button" class="btn sm" data-report="${esc(r.report_path)}">Open ${esc(r.report_name || 'report')}</button>` : '<span class="muted">None</span>'}</td>
+    <td class="small">${esc(r.notes)}</td><td class="small">${esc(r.recorded_by)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No visits logged yet.</td></tr>'}
+  </tbody></table></div></section>`);
+  wireReportLinks();
+  $('#pf').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    busy($('button', e.target), async () => {
+      await q(sb.from('outside_service_plans').update({ vendor: f.vendor || '', interval_months: Number(f.interval_months) || 12, next_due: f.next_due || null, notes: f.notes || '', active: e.target.active.checked }).eq('id', pid));
+      toast('Saved');
+      render();
+    });
+  });
+}, { sup: true });
 
 // ---------------------------------------------------------------- departments
 route('/departments', async () => {
