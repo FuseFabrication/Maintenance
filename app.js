@@ -217,6 +217,8 @@ function officeShell(active, body, badge) {
     ['/dash', 'Dashboard'], ['/machines', 'Machines'], ['/departments', 'Departments'],
     ['/exceptions', 'Exceptions'], ['/map', 'Shop floor map'], ['/floor', 'Tablet check-in'],
   ];
+  if (isSup()) nav.push(['/reports', 'Reports']);
+  if (isSup()) nav.push(['/manual-pages', 'Manual pages']);
   if (isSup()) nav.push(['/outside', 'Outside inspections']);
   if (isSup()) nav.push(['/admin', 'Admin']);
   return `<div class="office">
@@ -809,6 +811,91 @@ route('/exceptions', async () => {
 });
 
 
+
+// ---------------------------------------------------------------- manual pages
+const MANUAL_BUCKET = 'manuals';
+let manualPageRows = null;
+async function loadManualPages(force) {
+  if (!manualPageRows || force) manualPageRows = await q(sb.from('manual_pages').select('*').order('manual_key').order('page'));
+  return manualPageRows;
+}
+async function showManualPages(refs, heading) {
+  const rows = await loadManualPages();
+  const pages = refs.map((r) => rows.find((x) => x.manual_key === r.manual && x.page === r.page) || { manual_key: r.manual, page: r.page, manual_title: r.manual, label: '', storage_path: null });
+  let i = 0;
+  const dlg = document.createElement('dialog');
+  dlg.className = 'mpdlg';
+  dlg.setAttribute('aria-label', 'Manual page');
+  document.body.appendChild(dlg);
+  const urls = {};
+  const draw = async () => {
+    const pg = pages[i];
+    dlg.innerHTML = `<div class="mphead"><div><b>${esc(pg.manual_title)}</b><div class="small muted">${esc(pg.label || '')} · PDF page ${pg.page}</div><div class="small muted">For: ${esc(heading || '')}</div></div><button type="button" class="btn" data-close>Close</button></div>
+      <div class="mpbody">${pg.storage_path ? '<div class="loading">Loading page…</div>' : `<p class="notice">This page picture has not been uploaded yet. Find it in ${esc(pg.manual_title)}, PDF page ${pg.page}.</p>`}</div>
+      <div class="mpfoot"><button type="button" class="btn" data-prev ${i === 0 ? 'disabled' : ''}>Previous</button><span class="small muted">Page ${i + 1} of ${pages.length} · tap the page to zoom</span><button type="button" class="btn" data-next ${i === pages.length - 1 ? 'disabled' : ''}>Next</button></div>`;
+    $('[data-close]', dlg).addEventListener('click', () => dlg.close());
+    $('[data-prev]', dlg).addEventListener('click', () => { i--; draw(); });
+    $('[data-next]', dlg).addEventListener('click', () => { i++; draw(); });
+    if (!pg.storage_path) return;
+    const k = pg.storage_path;
+    if (!urls[k]) {
+      const { data, error } = await sb.storage.from(MANUAL_BUCKET).createSignedUrl(k, 3600);
+      if (error) { $('.mpbody', dlg).innerHTML = `<p class="notice">${esc(errMsg(error))}</p>`; return; }
+      urls[k] = data.signedUrl;
+    }
+    const body = $('.mpbody', dlg);
+    body.innerHTML = `<img src="${urls[k]}" alt="${esc(pg.manual_title)}, page ${pg.page}">`;
+    $('img', body).addEventListener('click', (e) => e.target.classList.toggle('zoom'));
+  };
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
+  draw();
+}
+
+route('/manual-pages', async () => {
+  app.innerHTML = officeShell('/manual-pages', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const rows = await loadManualPages(true);
+  const body = `
+  <div class="head"><div><h1>Manual pages</h1><p class="muted" style="margin:4px 0 0">Pictures of the manual pages behind the checklist items. They show on the check screen under each item. Only signed-in people can see them.</p></div></div>
+  <section class="card stack">
+    <h2>Upload page pictures</h2>
+    <p class="small muted" style="margin:0">Pick all the picture files at once. Each file name tells the site which page it is (for example <b>accurpress-ed5__p151.jpg</b>), so there is nothing to type.</p>
+    <form id="mpf" class="row"><input type="file" name="files" accept="image/jpeg,image/png" multiple required><button class="btn primary" type="submit">Upload</button></form>
+    <div id="mpres" class="stack small"></div>
+  </section>
+  <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Manual</th><th>PDF page</th><th>What's on it</th><th>File name</th><th>Status</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td>${esc(r.manual_title)}</td><td>${r.page}</td><td class="small">${esc(r.label)}</td><td class="tiny muted">${esc(r.manual_key)}__p${String(r.page).padStart(3, '0')}.jpg</td><td>${r.storage_path ? chip('Uploaded', 'c-ok') : chip('Missing', 'c-warn')}</td></tr>`).join('')}
+  </tbody></table></div></section>`;
+  app.innerHTML = officeShell('/manual-pages', body);
+  $('#mpf').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const files = [...$('input[type=file]', e.target).files];
+    busy($('button', e.target), async () => {
+      const out = $('#mpres');
+      out.innerHTML = '';
+      let ok = 0;
+      for (const f of files) {
+        const m = /^(.+)__p0*(\d+)\.(jpe?g|png)$/i.exec(f.name);
+        const row = m && rows.find((r) => r.manual_key === m[1] && r.page === Number(m[2]));
+        const line = document.createElement('div');
+        if (!row) { line.className = 't-bad'; line.textContent = `${f.name}: not a recognised page file name, skipped`; out.appendChild(line); continue; }
+        const ext = m[3].toLowerCase() === 'png' ? 'png' : 'jpg';
+        const path = `pages/${row.manual_key}__p${String(row.page).padStart(3, '0')}.${ext}`;
+        const { error } = await sb.storage.from(MANUAL_BUCKET).upload(path, f, { upsert: true, contentType: ext === 'png' ? 'image/png' : 'image/jpeg' });
+        if (error) { line.className = 't-bad'; line.textContent = `${f.name}: ${errMsg(error)}`; out.appendChild(line); continue; }
+        const { error: e2 } = await sb.from('manual_pages').update({ storage_path: path, uploaded_at: new Date().toISOString() }).eq('manual_key', row.manual_key).eq('page', row.page);
+        if (e2) { line.className = 't-bad'; line.textContent = `${f.name}: ${errMsg(e2)}`; out.appendChild(line); continue; }
+        ok++;
+        line.className = 't-ok'; line.textContent = `${f.name}: uploaded`; out.appendChild(line);
+      }
+      toast(`${ok} of ${files.length} uploaded`, ok < files.length);
+      manualPageRows = null;
+      if (ok) setTimeout(() => render(), 1500);
+    });
+  });
+}, { sup: true });
+
 // ---------------------------------------------------------------- reports
 route('/reports', async () => {
   app.innerHTML = officeShell('/reports', '<div class="loading">Loading…</div>');
@@ -1004,7 +1091,7 @@ route('/admin/checklist/(new|[0-9a-f-]{36})', async (cid) => {
     const clean = items.map((it) => {
       const num = it.input_type === 'number';
       const nv = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-      return { area: (it.area || '').trim(), prompt: (it.prompt || '').trim(), criteria: (it.criteria || '').trim(), input_type: num ? 'number' : 'yesno', unit: num ? ((it.unit || '').trim() || null) : null, min_value: num ? nv(it.min_value) : null, max_value: num ? nv(it.max_value) : null };
+      return { area: (it.area || '').trim(), prompt: (it.prompt || '').trim(), criteria: (it.criteria || '').trim(), manual_refs: it.manual_refs || [], input_type: num ? 'number' : 'yesno', unit: num ? ((it.unit || '').trim() || null) : null, min_value: num ? nv(it.min_value) : null, max_value: num ? nv(it.max_value) : null };
     }).filter((it) => it.prompt);
     if (!clean.length) { toast('Add at least one item', true); return; }
     busy($('button[type=submit]', e.target), async () => {
@@ -1468,7 +1555,7 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
   <div class="row" style="justify-content:space-between"><span class="small muted">Answer every item. If something doesn't pass, tap No and say what you found.</span><b id="prog" class="small"></b></div>
   <form id="ckf" class="stack">
     ${items.map((it) => `<div class="qitem" data-item="${it.seq}"><div class="q"><div class="txt"><span class="muted" style="font-weight:700;width:24px;flex-shrink:0">${it.seq}</span>
-      <div><div style="font-size:17px;font-weight:500">${esc(it.prompt)}</div><div class="small muted">${esc([it.area, it.criteria ? 'Pass if: ' + it.criteria : ''].filter(Boolean).join(' · '))}</div></div></div>
+      <div><div style="font-size:17px;font-weight:500">${esc(it.prompt)}</div><div class="small muted">${esc([it.area, it.criteria ? 'Pass if: ' + it.criteria : ''].filter(Boolean).join(' · '))}</div>${(it.manual_refs || []).length ? `<button type="button" class="btn sm mpbtn" data-mp="${it.seq}">Manual page${it.manual_refs.length > 1 ? 's' : ''}</button>` : ''}</div></div>
       ${it.input_type === 'number'
         ? `<div class="numin"><input type="number" inputmode="decimal" step="any" data-num aria-label="Item ${it.seq} reading"><span class="unit">${esc(it.unit || '')}</span></div>`
         : `<div class="yn" role="group" aria-label="Item ${it.seq}"><button type="button" class="yes" data-a="yes" aria-pressed="false">Yes</button><button type="button" class="no" data-a="no" aria-pressed="false">No</button></div>`}</div>
@@ -1484,6 +1571,10 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
     $('#sub').disabled = n < items.length;
   };
   update();
+  $$('[data-mp]').forEach((b) => b.addEventListener('click', () => {
+    const it = items.find((x) => x.seq === Number(b.dataset.mp));
+    showManualPages(it.manual_refs, it.prompt).catch((err) => toast(errMsg(err), true));
+  }));
   $$('[data-item]').forEach((box) => {
     const seq = Number(box.dataset.item);
     $$('[data-a]', box).forEach((b) => b.addEventListener('click', () => {
