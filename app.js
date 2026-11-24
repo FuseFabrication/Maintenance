@@ -1583,6 +1583,7 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
       const itx = items.find((x) => x.seq === seq);
       const fail = v !== (itx && itx.pass_answer === 'no' ? 'no' : 'yes');
       ans[seq] = { answer: fail ? 'no' : 'yes', response: v, note: (ans[seq] && ans[seq].note) || '' };
+      $$('[data-a]', box).forEach((x) => { x.classList.toggle('ok', x === b && !fail); x.classList.toggle('bad', x === b && fail); });
       box.classList.toggle('no', fail);
       const nl = $('[data-note]', box);
       nl.hidden = !fail;
