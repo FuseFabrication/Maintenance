@@ -964,9 +964,15 @@ route('/admin/checklist/(new|[0-9a-f-]{36})', async (cid) => {
       <div class="row" style="gap:6px"><button type="button" class="btn sm" data-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Move item ${i + 1} up">↑</button><button type="button" class="btn sm" data-down="${i}" ${i === items.length - 1 ? 'disabled' : ''} aria-label="Move item ${i + 1} down">↓</button><button type="button" class="btn sm danger" data-del="${i}" aria-label="Remove item ${i + 1}">Remove</button></div></div>
       <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,3fr) minmax(0,1.3fr);gap:10px">
       <label>Area<input data-f="area" data-i="${i}" value="${esc(it.area)}" placeholder="e.g. Chiller"></label>
-      <label>Check (answered Yes / No)<input data-f="prompt" data-i="${i}" value="${esc(it.prompt)}" required></label>
-      <label>Pass if<input data-f="criteria" data-i="${i}" value="${esc(it.criteria)}" placeholder="e.g. Above 100 psi"></label></div></div>`).join('');
+      <label>Check<input data-f="prompt" data-i="${i}" value="${esc(it.prompt)}" required></label>
+      <label>Pass if<input data-f="criteria" data-i="${i}" value="${esc(it.criteria)}" placeholder="e.g. Above 100 psi"></label></div>
+      <div class="grid" style="grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));gap:10px">
+      <label>Answer type<select data-f="input_type" data-i="${i}"><option value="yesno" ${it.input_type !== 'number' ? 'selected' : ''}>Yes / No</option><option value="number" ${it.input_type === 'number' ? 'selected' : ''}>Number (type a reading)</option></select></label>
+      ${it.input_type === 'number' ? `<label>Lowest OK<input type="number" step="any" data-f="min_value" data-i="${i}" value="${esc(it.min_value ?? '')}" placeholder="optional"></label>
+      <label>Highest OK<input type="number" step="any" data-f="max_value" data-i="${i}" value="${esc(it.max_value ?? '')}" placeholder="optional"></label>
+      <label>Unit<input data-f="unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="e.g. psi"></label>` : ''}</div></div>`).join('');
     $$('#items [data-f]').forEach((inp) => inp.addEventListener('input', () => { items[inp.dataset.i][inp.dataset.f] = inp.value; }));
+    $$('#items select[data-f="input_type"]').forEach((sel2) => sel2.addEventListener('change', () => { draw(); }));
     $$('#items [data-del]').forEach((b) => b.addEventListener('click', () => { items.splice(+b.dataset.del, 1); if (!items.length) items.push({ area: '', prompt: '', criteria: '' }); draw(); }));
     $$('#items [data-up]').forEach((b) => b.addEventListener('click', () => { const i = +b.dataset.up; [items[i - 1], items[i]] = [items[i], items[i - 1]]; draw(); }));
     $$('#items [data-down]').forEach((b) => b.addEventListener('click', () => { const i = +b.dataset.down; [items[i + 1], items[i]] = [items[i], items[i + 1]]; draw(); }));
@@ -995,7 +1001,11 @@ route('/admin/checklist/(new|[0-9a-f-]{36})', async (cid) => {
   $('#clf').addEventListener('submit', (e) => {
     e.preventDefault();
     const f = formData(e.target);
-    const clean = items.map((it) => ({ area: (it.area || '').trim(), prompt: (it.prompt || '').trim(), criteria: (it.criteria || '').trim() })).filter((it) => it.prompt);
+    const clean = items.map((it) => {
+      const num = it.input_type === 'number';
+      const nv = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+      return { area: (it.area || '').trim(), prompt: (it.prompt || '').trim(), criteria: (it.criteria || '').trim(), input_type: num ? 'number' : 'yesno', unit: num ? ((it.unit || '').trim() || null) : null, min_value: num ? nv(it.min_value) : null, max_value: num ? nv(it.max_value) : null };
+    }).filter((it) => it.prompt);
     if (!clean.length) { toast('Add at least one item', true); return; }
     busy($('button[type=submit]', e.target), async () => {
       const rev = isNew ? 1 : c.revision + 1;
@@ -1459,8 +1469,10 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
   <form id="ckf" class="stack">
     ${items.map((it) => `<div class="qitem" data-item="${it.seq}"><div class="q"><div class="txt"><span class="muted" style="font-weight:700;width:24px;flex-shrink:0">${it.seq}</span>
       <div><div style="font-size:17px;font-weight:500">${esc(it.prompt)}</div><div class="small muted">${esc([it.area, it.criteria ? 'Pass if: ' + it.criteria : ''].filter(Boolean).join(' · '))}</div></div></div>
-      <div class="yn" role="group" aria-label="Item ${it.seq}"><button type="button" class="yes" data-a="yes" aria-pressed="false">Yes</button><button type="button" class="no" data-a="no" aria-pressed="false">No</button></div></div>
-      <label class="t-bad" data-note hidden style="padding-left:36px">What did you find? (required)<textarea rows="2" style="font-weight:400;color:var(--ink)"></textarea></label></div>`).join('')}
+      ${it.input_type === 'number'
+        ? `<div class="numin"><input type="number" inputmode="decimal" step="any" data-num aria-label="Item ${it.seq} reading"><span class="unit">${esc(it.unit || '')}</span></div>`
+        : `<div class="yn" role="group" aria-label="Item ${it.seq}"><button type="button" class="yes" data-a="yes" aria-pressed="false">Yes</button><button type="button" class="no" data-a="no" aria-pressed="false">No</button></div>`}</div>
+      <label class="t-bad" data-note hidden style="padding-left:36px">${it.input_type === 'number' ? 'Reading is outside the range. What did you find? (required)' : 'What did you find? (required)'}<textarea rows="2" style="font-weight:400;color:var(--ink)"></textarea></label></div>`).join('')}
     <label>Other notes (optional)<textarea name="notes" rows="2"></textarea></label>
     <p class="small muted" style="margin:0">Submitting as <b>${esc(w.name)}</b> · <a href="#" data-notyou>Not you?</a></p>
     <button class="btn primary big" type="submit" id="sub" disabled>Submit check</button>
@@ -1484,13 +1496,28 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
       if (v === 'no') $('textarea', nl).focus();
       update();
     }));
+    const numEl = $('[data-num]', box);
+    if (numEl) {
+      const it = items.find((x) => x.seq === seq);
+      numEl.addEventListener('input', () => {
+        const raw = numEl.value.trim();
+        const v = Number(raw);
+        const nl = $('[data-note]', box);
+        if (raw === '' || !Number.isFinite(v)) { delete ans[seq]; box.classList.remove('no'); nl.hidden = true; update(); return; }
+        const ok = (it.min_value == null || v >= Number(it.min_value)) && (it.max_value == null || v <= Number(it.max_value));
+        ans[seq] = { answer: ok ? 'yes' : 'no', value: v, note: (ans[seq] && ans[seq].note) || '' };
+        box.classList.toggle('no', !ok);
+        nl.hidden = ok;
+        update();
+      });
+    }
     $('[data-note] textarea', box).addEventListener('input', (e) => { if (ans[seq]) ans[seq].note = e.target.value; });
   });
   $('#ckf').addEventListener('submit', (e) => {
     e.preventDefault();
     const missingNote = items.find((it) => ans[it.seq] && ans[it.seq].answer === 'no' && !ans[it.seq].note.trim());
     if (missingNote) { toast(`Item ${missingNote.seq}: say what you found`, true); $(`[data-item="${missingNote.seq}"] textarea`).focus(); return; }
-    const answers = items.map((it) => ({ seq: it.seq, area: it.area, prompt: it.prompt, criteria: it.criteria, answer: ans[it.seq].answer, note: (ans[it.seq].note || '').trim() }));
+    const answers = items.map((it) => ({ seq: it.seq, area: it.area, prompt: it.prompt, criteria: it.criteria, answer: ans[it.seq].answer, note: (ans[it.seq].note || '').trim(), ...(it.input_type === 'number' ? { value: ans[it.seq].value, unit: it.unit || '' } : {}) }));
     const failed = answers.filter((x) => x.answer === 'no');
     busy($('#sub'), async () => {
       const worker = getWorker();
