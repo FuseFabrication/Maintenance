@@ -1,4 +1,4 @@
-# Fuse Maintenance Log
+# Fuse Asset Maintenance
 
 Maintenance logging for the machines at Fuse Fabrication. It's a static website (GitHub → Netlify) backed by a Supabase database. There's no build step.
 

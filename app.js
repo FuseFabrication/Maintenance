@@ -223,7 +223,7 @@ function officeShell(active, body, badge) {
   if (isSup()) nav.push(['/admin', 'Admin']);
   return `<div class="office">
   <nav class="side" aria-label="Main">
-    <div class="brand"><a href="#/dash" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a><span>Asset Management and Maintenance</span></div>
+    <div class="brand"><a href="#/dash" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a><span>Asset Maintenance</span></div>
     ${nav.map(([h, t]) => `<a href="#${h}" class="${active === h ? 'on' : ''}">${t}${h === '/exceptions' && badge ? `<span class="chip c-warn">${badge}</span>` : ''}</a>`).join('')}
     <div class="foot"><span>${esc(session.user.email)} · ${esc(profile.role)}</span><button type="button" data-signout>Sign out</button></div>
   </nav>
@@ -264,7 +264,7 @@ async function exceptionBadge() {
 // ------------------------------------------------------------------ login
 function renderLogin() {
   app.innerHTML = `<div class="floor"><header class="fhead"><div class="row"><div class="logo">${ICON}</div>
-    <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px">Fuse Fabrication · Maintenance</div></div></header>
+    <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px">Fuse Fabrication · Asset Maintenance</div></div></header>
   <main class="fmain" style="max-width:440px"><h1>Sign in</h1>
   <form id="login" class="card stack">
     <label>Email<input name="email" type="email" autocomplete="username" required></label>

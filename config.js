@@ -1,4 +1,4 @@
-// Fuse Maintenance Log – settings.
+// Fuse Asset Maintenance – settings.
 // The publishable key is meant to be public: what each login can do is
 // controlled by the database rules in supabase/schema.sql.
 window.FUSE_CONFIG = {
