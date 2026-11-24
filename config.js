@@ -10,5 +10,8 @@ window.FUSE_CONFIG = {
 
   // A shared tablet goes back to the "Who's doing the maintenance?"
   // screen after this many minutes without a tap.
-  idleMinutes: 30
+  idleMinutes: 30,
+
+  // Employee numbers sign in as <number>@<loginDomain> in Supabase Auth.
+  loginDomain: "fuse.example.com"
 };

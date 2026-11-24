@@ -105,7 +105,8 @@ async function busy(btn, fn) {
 
 // ------------------------------------------------------------------ session / roles
 let session = null;
-let profile = null; // {user_id, role, display_name}
+let profile = null; // {user_id, role, display_name, login_id}
+let person = null;  // the people row whose employee number matches this login
 const isSup = () => profile && (profile.role === 'supervisor' || profile.role === 'admin');
 const isAdmin = () => profile && profile.role === 'admin';
 
@@ -113,12 +114,29 @@ async function loadProfile() {
   profile = null;
   if (!session) return;
   const uid = session.user.id;
+  const loginId = String(session.user.email || '').split('@')[0];
   let rows = await q(sb.from('profiles').select('*').eq('user_id', uid));
   if (!rows.length) {
-    await q(sb.from('profiles').insert({ user_id: uid, role: 'tablet', display_name: '' }));
+    await q(sb.from('profiles').insert({ user_id: uid, role: 'tablet', display_name: '', login_id: loginId }));
     rows = await q(sb.from('profiles').select('*').eq('user_id', uid));
   }
   profile = rows[0];
+  // The employee number is the login id. The admin People tab holds the name that goes with it.
+  person = null;
+  try {
+    const ps = await q(sb.from('people').select('id,name,active,employee_number').ilike('employee_number', loginId));
+    person = ps[0] || null;
+  } catch (e) { person = null; }
+}
+// Inactive employees keep their history but can no longer sign in.
+async function blockIfInactive() {
+  if (person && person.active === false) {
+    await sb.auth.signOut();
+    session = null; profile = null; person = null;
+    renderLogin('This employee number is inactive. See a supervisor.');
+    return true;
+  }
+  return false;
 }
 
 // ------------------------------------------------------------------ who is working (the person who signed in)
@@ -127,7 +145,7 @@ let lastActivity = Date.now();
 // Everything logged is recorded under the signed-in person's display name (set by an admin on Admin > Logins).
 function getWorker() {
   if (!profile || !session) return null;
-  const name = (profile.display_name || '').trim() || String(session.user.email || '').split('@')[0];
+  const name = (person && person.name) || (profile.display_name || '').trim() || String(session.user.email || '').split('@')[0];
   return name ? { name } : null;
 }
 function query() { return new URLSearchParams((location.hash.split('?')[1]) || ''); }
@@ -194,6 +212,7 @@ async function render() {
   if (!profile) {
     try { await loadProfile(); } catch (e) { app.innerHTML = `<div class="main"><div class="err">${esc(errMsg(e))}</div></div>`; return; }
   }
+  if (await blockIfInactive()) return;
   let path = currentPath();
   if (path === '/') { location.replace('#' + (profile.role === 'tablet' ? '/floor' : '/dash')); return; }
   if (profile.role === 'tablet' && !tabletAllowed(path)) { location.replace('#/floor'); return; }
@@ -259,22 +278,23 @@ async function exceptionBadge() {
 }
 
 // ------------------------------------------------------------------ login
-function renderLogin() {
+function renderLogin(notice) {
   app.innerHTML = `<div class="floor"><header class="fhead"><div class="row"><div class="logo">${ICON}</div>
     <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px">Fuse Fabrication · Asset Maintenance</div></div></header>
   <main class="fmain" style="max-width:440px"><h1>Sign in</h1>
   <form id="login" class="card stack">
-    <label>Email<input name="email" type="email" autocomplete="username" required></label>
+    ${notice ? `<div class="err" role="alert">${esc(notice)}</div>` : ''}
+    <label>Employee number<input name="email" type="text" inputmode="text" autocomplete="username" autocapitalize="off" required></label>
     <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
     <button class="btn primary" type="submit">Sign in</button>
-    <p class="muted small" style="margin:0">Shop-floor tablets sign in once with the shared tablet login. People pick their own name each time they log maintenance.</p>
+    <p class="muted small" style="margin:0">Sign in with your employee number. Your name is recorded on everything you log.</p>
   </form></main></div>`;
   $('#login').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = formData(e.target);
     const btn = $('button[type=submit]', e.target);
     await busy(btn, async () => {
-      const { data, error } = await sb.auth.signInWithPassword({ email: f.email, password: f.password });
+      const { data, error } = await sb.auth.signInWithPassword({ email: String(f.email).trim().includes('@') ? String(f.email).trim() : String(f.email).trim().toLowerCase() + '@' + (window.FUSE_CONFIG.loginDomain || 'fuse.example.com'), password: f.password });
       if (error) throw error;
       session = data.session; profile = null;
       await render();
@@ -977,15 +997,16 @@ route('/admin(?:/(people|checklists|machines|holidays|logins))?', async (tab) =>
   } else if (tab === 'people') {
     const people = await q(sb.from('people').select('*').order('name'));
     content = `<section class="card"><h2>Add a person</h2><form id="pf" class="row" style="align-items:flex-end">
+      <label>Employee #<input name="employee_number" required autocapitalize="off" style="max-width:120px"></label>
       <label style="flex:1 1 220px">Full name<input name="name" required></label>
       <label>Department<select name="department"><option value="">—</option>${core.depts.map((d) => `<option>${esc(d)}</option>`).join('')}</select></label>
       <label>Role<input name="role_label" value="Operator"></label><button class="btn primary" type="submit">Add</button></form></section>
-    <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
-    ${people.map((p) => `<tr><td style="font-weight:600">${esc(p.name)}</td>
+    <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Employee #</th><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+    ${people.map((p) => `<tr><td><input data-pnum="${p.id}" value="${esc(p.employee_number || '')}" aria-label="Employee number for ${esc(p.name)}" style="max-width:110px"></td><td style="font-weight:600">${esc(p.name)}</td>
       <td><select data-pdept="${p.id}" aria-label="Department for ${esc(p.name)}"><option value="">—</option>${core.depts.map((d) => `<option ${d === p.department ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></td>
       <td>${esc(p.role_label)}</td>
       <td>${!p.confirmed ? chip('Added on a tablet – confirm', 'c-acc') : p.active ? chip('Active', 'c-ok') : chip('Inactive', 'c-grey')}</td>
-      <td class="row" style="gap:6px">${!p.confirmed ? `<button class="btn sm" data-pconf="${p.id}">Confirm</button>` : ''}<button class="btn sm" data-pact="${p.id}" data-on="${p.active ? 0 : 1}">${p.active ? 'Deactivate' : 'Activate'}</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">No names yet. Add the people who do maintenance so they can pick their name on the tablet.</td></tr>'}
+      <td class="row" style="gap:6px">${!p.confirmed ? `<button class="btn sm" data-pconf="${p.id}">Confirm</button>` : ''}<button class="btn sm" data-pact="${p.id}" data-on="${p.active ? 0 : 1}">${p.active ? 'Deactivate' : 'Activate'}</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No people yet. Add each employee with their employee number. Deactivate (never delete) anyone who leaves: they cannot sign in, and their history stays.</td></tr>'}
     </tbody></table></div></section>`;
   } else if (tab === 'holidays') {
     const hol = await q(sb.from('holidays').select('*').order('day', { ascending: false }));
@@ -995,10 +1016,12 @@ route('/admin(?:/(people|checklists|machines|holidays|logins))?', async (tab) =>
     ${hol.map((h) => `<tr><td>${fmtDate(h.day)}</td><td>${esc(h.name)}</td><td><button class="btn sm danger" data-hdel="${h.day}">Remove</button></td></tr>`).join('') || '<tr><td colspan="3" class="muted">None yet.</td></tr>'}</tbody></table></div></section>`;
   } else if (tab === 'logins') {
     const profs = await q(sb.from('profiles').select('*').order('created_at'));
-    content = `<section class="card"><p class="small muted" style="margin-top:0">Logins are created in Supabase (Authentication → Users → Add user). Each one shows up here after its first sign-in. Set the role here, and type the person's full name in Display name: that name is recorded on everything they log. Tablet logins can only use the tablet screens.</p></section>
+    const ppl = await q(sb.from('people').select('name,employee_number,active'));
+    const byNum = {}; ppl.forEach((x) => { if (x.employee_number) byNum[x.employee_number.toLowerCase()] = x; });
+    content = `<section class="card"><p class="small muted" style="margin-top:0">Create each login in Supabase (Authentication → Users → Add user) with the email <b>employee number@fuse.example.com</b> (for example 1042@fuse.example.com) and a password. It shows up here after the first sign-in. Add the same employee number on the People tab with the person's name; that name is recorded on everything they log. Set the role here (tablet logins can only use the tablet screens). To stop someone signing in, deactivate them on People.</p></section>
     <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Login</th><th>Display name</th><th>Role</th><th></th></tr></thead><tbody>
-    ${profs.map((p) => `<tr><td class="small">${p.user_id === session.user.id ? esc(session.user.email) + ' (you)' : '<span class="muted">' + esc(p.user_id) + '</span>'}</td>
-      <td><input data-pname="${p.user_id}" value="${esc(p.display_name)}" aria-label="Display name"></td>
+    ${profs.map((p) => `<tr><td class="small">${p.user_id === session.user.id ? esc(session.user.email) + ' (you)' : '<b>' + esc(p.login_id || '—') + '</b>'}${p.user_id === session.user.id ? '' : ''}</td>
+      <td>${esc((byNum[String(p.login_id || '').toLowerCase()] || {}).name || '— no matching employee number in People —')}<input type="hidden" data-pname="${p.user_id}" value="${esc(p.display_name)}"></td>
       <td><select data-prole="${p.user_id}" aria-label="Role">${['tablet', 'supervisor', 'admin'].map((r) => `<option ${r === p.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
       <td><button class="btn sm" data-psave="${p.user_id}">Save</button></td></tr>`).join('')}</tbody></table></div></section>`;
   }
@@ -1008,9 +1031,10 @@ route('/admin(?:/(people|checklists|machines|holidays|logins))?', async (tab) =>
   if (tab === 'people') {
     $('#pf').addEventListener('submit', (e) => {
       e.preventDefault(); const f = formData(e.target);
-      busy($('button', e.target), async () => { await q(sb.from('people').insert({ name: f.name, department: f.department || null, role_label: f.role_label || 'Operator', confirmed: true })); toast('Added'); render(); });
+      busy($('button', e.target), async () => { await q(sb.from('people').insert({ employee_number: f.employee_number.trim(), name: f.name, department: f.department || null, role_label: f.role_label || 'Operator', confirmed: true })); toast('Added'); render(); });
     });
     $$('[data-pdept]').forEach((s) => s.addEventListener('change', async () => { try { await q(sb.from('people').update({ department: s.value || null }).eq('id', s.dataset.pdept)); toast('Saved'); } catch (e) { toast(errMsg(e), true); } }));
+    $$('[data-pnum]').forEach((i) => i.addEventListener('change', async () => { try { await q(sb.from('people').update({ employee_number: i.value.trim() || null }).eq('id', i.dataset.pnum)); toast('Saved'); } catch (e) { toast(errMsg(e), true); } }));
     $$('[data-pconf]').forEach((b) => b.addEventListener('click', () => busy(b, async () => { await q(sb.from('people').update({ confirmed: true }).eq('id', b.dataset.pconf)); render(); })));
     $$('[data-pact]').forEach((b) => b.addEventListener('click', () => busy(b, async () => { await q(sb.from('people').update({ active: b.dataset.on === '1', confirmed: true }).eq('id', b.dataset.pact)); render(); })));
   }
