@@ -1445,6 +1445,54 @@ route('/floor', async () => {
   location.replace(next || '#/floor/pick');
 });
 
+// Scan a machine's QR label with the tablet camera
+function scanQr(onText) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:50;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:12px';
+  ov.innerHTML = '<video playsinline muted style="max-width:100%;max-height:70vh;border-radius:12px"></video><div style="color:#fff;font-size:18px;text-align:center" id="scanmsg">Point the camera at the QR label on the machine</div><button class="btn big" type="button" id="scanx">Cancel</button>';
+  document.body.appendChild(ov);
+  const video = ov.querySelector('video');
+  let stream = null, stopped = false;
+  const stop = () => { stopped = true; if (stream) stream.getTracks().forEach((t) => t.stop()); ov.remove(); window.removeEventListener('hashchange', stop); };
+  window.addEventListener('hashchange', stop);
+  ov.querySelector('#scanx').addEventListener('click', stop);
+  (async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser cannot use the camera here.');
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      video.srcObject = stream; await video.play();
+      const det = window.BarcodeDetector ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
+      if (!det && !window.jsQR) throw new Error('QR scanning is not available in this browser. Type the tag instead.');
+      const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      let last = 0;
+      const tick = async (now) => {
+        if (stopped) return;
+        if (now - last > 200 && video.videoWidth) {
+          last = now; let text = '';
+          try {
+            if (det) { const r = await det.detect(video); if (r.length) text = r[0].rawValue; }
+            else { canvas.width = video.videoWidth; canvas.height = video.videoHeight; ctx.drawImage(video, 0, 0); const img = ctx.getImageData(0, 0, canvas.width, canvas.height); const r = window.jsQR(img.data, img.width, img.height); if (r) text = r.data; }
+          } catch (e) { /* keep scanning */ }
+          if (text) { if (onText(text)) { stop(); return; } ov.querySelector('#scanmsg').textContent = 'That code is not a machine. Try another label.'; last = now + 1500; }
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    } catch (e) {
+      ov.querySelector('#scanmsg').textContent = (e && e.name === 'NotAllowedError') ? 'Camera access was blocked. Allow the camera for this site in the browser settings.' : (e.message || 'Could not start the camera.');
+    }
+  })();
+}
+
+// Pick a department, then a machine
+route('/floor/dept', async () => {
+  app.innerHTML = floorShell('', '<div class="loading">Loading…</div>');
+  await loadCore();
+  app.innerHTML = floorShell('', `<h1>Which department?</h1>
+  <div class="tiles">${core.depts.map((d) => { const n = deptAssets(d).length; return `<a class="mtile" href="#/floor/pick?dept=${encodeURIComponent(d)}" style="min-height:96px;justify-content:center"><span class="t">${esc(d)}</span><span class="small muted">${n} machine${n === 1 ? '' : 's'}</span></a>`; }).join('')}
+    <a class="mtile" href="#/floor/pick?dept=" style="min-height:96px;justify-content:center"><span class="t">All machines</span><span class="small muted">${activeAssets().length} machines</span></a></div>`);
+});
+
 // Pick a machine
 route('/floor/pick', async () => {
   app.innerHTML = floorShell('', '<div class="loading">Loading…</div>');
@@ -1455,8 +1503,8 @@ route('/floor/pick', async () => {
   const doneN = list.filter((a) => dailyState(a).st === 'done').length;
   const dueN = list.filter((a) => ['done', 'due', 'skipped'].includes(dailyState(a).st)).length;
   const body = `
-  <div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>What are you checking?</h1><p class="muted" style="margin:6px 0 0">Type the machine tag, tap the machine, or find it on the shop map. Scanning the QR label on the machine with the tablet camera works too.</p></div>
-  <a class="btn primary big" href="#/map">Pick on the shop map</a></div>
+  <div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>What are you checking?</h1><p class="muted" style="margin:6px 0 0">Scan the QR label on the machine, pick a department, find it on the shop map, or type the machine tag.</p></div></div>
+  <div class="row" style="gap:10px;flex-wrap:wrap"><button type="button" class="btn primary big" id="scanbtn">Scan QR code</button><a class="btn primary big" href="#/floor/dept">Pick by department</a><a class="btn primary big" href="#/map">Pick on the shop map</a></div>
   <form id="tagf" class="card row"><label for="tag" style="flex:1 1 260px">Machine tag<input id="tag" name="tag" placeholder="e.g. PB-001 or FUSE-PB-001" autocomplete="off" style="height:56px;font-size:19px;text-transform:uppercase"></label><button class="btn dark big" type="submit" style="align-self:flex-end;height:56px">Go</button></form>
   <div class="row" style="justify-content:space-between"><h2>${esc(dept || 'All machines')}</h2><span class="small muted">${dueN ? `${doneN} of ${dueN} daily checks done today` : ''}</span></div>
   <div class="tiles">${list.map((a) => {
@@ -1473,6 +1521,14 @@ route('/floor/pick', async () => {
   <div class="row" style="padding-top:8px;border-top:1px solid var(--line)"><span class="small muted">Different department?</span>
     ${['', ...core.depts].map((d) => `<a class="pill" aria-pressed="${d === dept}" href="#/floor/pick?dept=${encodeURIComponent(d)}" style="display:inline-flex;align-items:center;height:44px">${esc(d || 'All')}</a>`).join('')}</div>`;
   app.innerHTML = floorShell('', body);
+  $('#scanbtn').addEventListener('click', () => scanQr((text) => {
+    const m = /#\/m\/([^/?#]+)/.exec(text);
+    const t = decodeURIComponent(m ? m[1] : text.trim()).toUpperCase().replace(/\s+/g, '');
+    const found = core.assetById[t] || core.assetById['FUSE-' + t] || core.assets.find((a) => (a.cpa_id || '').toUpperCase() === t);
+    if (!found) { toast(`No machine matches that code (${t})`, true); return false; }
+    location.hash = '#/m/' + encodeURIComponent(found.id);
+    return true;
+  }));
   $('#tagf').addEventListener('submit', (e) => {
     e.preventDefault();
     let t = formData(e.target).tag.toUpperCase().replace(/\s+/g, '');
