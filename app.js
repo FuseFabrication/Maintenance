@@ -223,7 +223,7 @@ function officeShell(active, body, badge) {
   if (isSup()) nav.push(['/admin', 'Admin']);
   return `<div class="office">
   <nav class="side" aria-label="Main">
-    <div class="brand"><a href="#/dash" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a><span>Maintenance</span></div>
+    <div class="brand"><a href="#/dash" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a><span>Asset Management and Maintenance</span></div>
     ${nav.map(([h, t]) => `<a href="#${h}" class="${active === h ? 'on' : ''}">${t}${h === '/exceptions' && badge ? `<span class="chip c-warn">${badge}</span>` : ''}</a>`).join('')}
     <div class="foot"><span>${esc(session.user.email)} · ${esc(profile.role)}</span><button type="button" data-signout>Sign out</button></div>
   </nav>
