@@ -617,7 +617,7 @@ route('/machine/([^/?]+)', async (id) => {
   const corrBtn = (type, rid) => isSup() ? `<button type="button" class="btn sm" data-correct="${type}:${rid}">Add correction</button>` : '';
   const hist = [
     ...insp.map((r) => ({ at: r.performed_at, html: `${chip(FREQ[r.frequency] + ' check', r.result === 'fail' ? 'c-info' : 'c-ok')} <b>${r.result === 'fail' ? 'Done – item failed' : 'Done – all passed'}</b> · Rev ${r.revision}
-      <details style="margin-top:6px"><summary class="small">${r.answers.length} item${r.answers.length === 1 ? '' : 's'} · show answers</summary><table style="margin-top:6px"><tbody>${r.answers.map((x) => `<tr><td style="width:36px">${x.seq}</td><td>${esc(x.prompt)}${x.note ? `<div class="small t-bad">${esc(x.note)}</div>` : ''}</td><td style="width:60px;font-weight:700" class="${x.answer === 'no' ? 't-bad' : 't-ok'}">${x.answer === 'no' ? 'No' : 'Yes'}</td></tr>`).join('')}</tbody></table>${r.notes ? `<p class="small">Notes: ${esc(r.notes)}</p>` : ''}</details>${corrHtml('inspection', r.id)}`, who: r.performed_by, type: 'inspection', id: r.id })),
+      <details style="margin-top:6px"><summary class="small">${r.answers.length} item${r.answers.length === 1 ? '' : 's'} · show answers</summary><table style="margin-top:6px"><tbody>${r.answers.map((x) => `<tr><td style="width:36px">${x.seq}</td><td>${esc(x.prompt)}${x.note ? `<div class="small t-bad">${esc(x.note)}</div>` : ''}</td><td style="width:60px;font-weight:700" class="${x.answer === 'no' ? 't-bad' : 't-ok'}">${x.response ? (x.response === 'no' ? 'No' : 'Yes') : x.value != null ? esc(x.value) : (x.answer === 'no' ? 'No' : 'Yes')}</td></tr>`).join('')}</tbody></table>${r.notes ? `<p class="small">Notes: ${esc(r.notes)}</p>` : ''}</details>${corrHtml('inspection', r.id)}`, who: r.performed_by, type: 'inspection', id: r.id })),
     ...skips.map((r) => ({ at: r.created_at, html: `${chip(FREQ[r.frequency] + ' check skipped', 'c-warn')} <b>${esc(SKIP_REASONS[r.reason])}</b><div class="small muted">${esc(r.note)}${r.makeup ? ' · make-up: ' + esc(r.makeup) : ''}</div>${corrHtml('skip', r.id)}`, who: r.reported_by, type: 'skip', id: r.id })),
     ...probs.map((r) => ({ at: r.created_at, html: `${chip('Problem', 'c-bad')} <b>${esc(r.category)}</b>${r.loto ? ' · LOTO applied' : ''}<div class="small">${esc(r.description)}</div>${corrHtml('problem', r.id)}`, who: r.reported_by, type: 'problem', id: r.id })),
     ...chg.map((r) => ({ at: r.created_at, html: `${chip('Status', 'c-grey')} ${esc(STATUS[r.old_status] || r.old_status || '—')} → <b>${esc(STATUS[r.new_status] || r.new_status)}</b>${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ''}${corrHtml('status_change', r.id)}`, who: r.changed_by, type: 'status_change', id: r.id })),
@@ -1057,7 +1057,7 @@ route('/admin/checklist/(new|[0-9a-f-]{36})', async (cid) => {
       <label>Answer type<select data-f="input_type" data-i="${i}"><option value="yesno" ${it.input_type !== 'number' ? 'selected' : ''}>Yes / No</option><option value="number" ${it.input_type === 'number' ? 'selected' : ''}>Number (type a reading)</option></select></label>
       ${it.input_type === 'number' ? `<label>Lowest OK<input type="number" step="any" data-f="min_value" data-i="${i}" value="${esc(it.min_value ?? '')}" placeholder="optional"></label>
       <label>Highest OK<input type="number" step="any" data-f="max_value" data-i="${i}" value="${esc(it.max_value ?? '')}" placeholder="optional"></label>
-      <label>Unit<input data-f="unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="e.g. psi"></label>` : ''}</div></div>`).join('');
+      <label>Unit<input data-f="unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="e.g. psi"></label>` : `<label>Passing answer<select data-f="pass_answer" data-i="${i}"><option value="yes" ${it.pass_answer !== 'no' ? 'selected' : ''}>Yes passes</option><option value="no" ${it.pass_answer === 'no' ? 'selected' : ''}>No passes</option></select></label>`}</div></div>`).join('');
     $$('#items [data-f]').forEach((inp) => inp.addEventListener('input', () => { items[inp.dataset.i][inp.dataset.f] = inp.value; }));
     $$('#items select[data-f="input_type"]').forEach((sel2) => sel2.addEventListener('change', () => { draw(); }));
     $$('#items [data-del]').forEach((b) => b.addEventListener('click', () => { items.splice(+b.dataset.del, 1); if (!items.length) items.push({ area: '', prompt: '', criteria: '' }); draw(); }));
@@ -1091,7 +1091,7 @@ route('/admin/checklist/(new|[0-9a-f-]{36})', async (cid) => {
     const clean = items.map((it) => {
       const num = it.input_type === 'number';
       const nv = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-      return { area: (it.area || '').trim(), prompt: (it.prompt || '').trim(), criteria: (it.criteria || '').trim(), manual_refs: it.manual_refs || [], input_type: num ? 'number' : 'yesno', unit: num ? ((it.unit || '').trim() || null) : null, min_value: num ? nv(it.min_value) : null, max_value: num ? nv(it.max_value) : null };
+      return { area: (it.area || '').trim(), prompt: (it.prompt || '').trim(), criteria: (it.criteria || '').trim(), manual_refs: it.manual_refs || [], input_type: num ? 'number' : 'yesno', unit: num ? ((it.unit || '').trim() || null) : null, min_value: num ? nv(it.min_value) : null, max_value: num ? nv(it.max_value) : null, pass_answer: !num && it.pass_answer === 'no' ? 'no' : 'yes' };
     }).filter((it) => it.prompt);
     if (!clean.length) { toast('Add at least one item', true); return; }
     busy($('button[type=submit]', e.target), async () => {
@@ -1552,7 +1552,7 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
   const body = `
   <div class="stack" style="gap:6px"><span class="small muted">${esc(a.id)} · ${esc(a.name)}</span><h1>${esc(cl.title)}</h1>
     <span class="small muted">${FREQ[cl.frequency]} · ${esc(cl.doc_id)} Rev ${cl.revision}${cl.est_minutes ? ` · about ${cl.est_minutes} minutes` : ''}${cl.approved_by ? '' : ' · <b>draft – not approved</b>'}</span></div>
-  <div class="row" style="justify-content:space-between"><span class="small muted">Answer every item. If something doesn't pass, tap No and say what you found.</span><b id="prog" class="small"></b></div>
+  <div class="row" style="justify-content:space-between"><span class="small muted">Answer every item. If something doesn't pass, say what you found.</span><b id="prog" class="small"></b></div>
   <form id="ckf" class="stack">
     ${items.map((it) => `<div class="qitem" data-item="${it.seq}"><div class="q"><div class="txt"><span class="muted" style="font-weight:700;width:24px;flex-shrink:0">${it.seq}</span>
       <div><div style="font-size:17px;font-weight:500">${esc(it.prompt)}</div><div class="small muted">${esc([it.area, it.criteria ? 'Pass if: ' + it.criteria : ''].filter(Boolean).join(' · '))}</div>${(it.manual_refs || []).length ? `<button type="button" class="btn sm mpbtn" data-mp="${it.seq}">Manual page${it.manual_refs.length > 1 ? 's' : ''}</button>` : ''}</div></div>
@@ -1580,11 +1580,13 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
     $$('[data-a]', box).forEach((b) => b.addEventListener('click', () => {
       const v = b.dataset.a;
       $$('[data-a]', box).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-      ans[seq] = { answer: v, note: (ans[seq] && ans[seq].note) || '' };
-      box.classList.toggle('no', v === 'no');
+      const itx = items.find((x) => x.seq === seq);
+      const fail = v !== (itx && itx.pass_answer === 'no' ? 'no' : 'yes');
+      ans[seq] = { answer: fail ? 'no' : 'yes', response: v, note: (ans[seq] && ans[seq].note) || '' };
+      box.classList.toggle('no', fail);
       const nl = $('[data-note]', box);
-      nl.hidden = v !== 'no';
-      if (v === 'no') $('textarea', nl).focus();
+      nl.hidden = !fail;
+      if (fail) $('textarea', nl).focus();
       update();
     }));
     const numEl = $('[data-num]', box);
@@ -1608,7 +1610,7 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
     e.preventDefault();
     const missingNote = items.find((it) => ans[it.seq] && ans[it.seq].answer === 'no' && !ans[it.seq].note.trim());
     if (missingNote) { toast(`Item ${missingNote.seq}: say what you found`, true); $(`[data-item="${missingNote.seq}"] textarea`).focus(); return; }
-    const answers = items.map((it) => ({ seq: it.seq, area: it.area, prompt: it.prompt, criteria: it.criteria, answer: ans[it.seq].answer, note: (ans[it.seq].note || '').trim(), ...(it.input_type === 'number' ? { value: ans[it.seq].value, unit: it.unit || '' } : {}) }));
+    const answers = items.map((it) => ({ seq: it.seq, area: it.area, prompt: it.prompt, criteria: it.criteria, answer: ans[it.seq].answer, ...(ans[it.seq].response ? { response: ans[it.seq].response } : {}), note: (ans[it.seq].note || '').trim(), ...(it.input_type === 'number' ? { value: ans[it.seq].value, unit: it.unit || '' } : {}) }));
     const failed = answers.filter((x) => x.answer === 'no');
     busy($('#sub'), async () => {
       const worker = getWorker();
