@@ -10,5 +10,5 @@ window.FUSE_CONFIG = {
 
   // A shared tablet goes back to the "Who's doing the maintenance?"
   // screen after this many minutes without a tap.
-  idleMinutes: 10
+  idleMinutes: 30
 };
