@@ -105,7 +105,8 @@ async function busy(btn, fn) {
 
 // ------------------------------------------------------------------ session / roles
 let session = null;
-let profile = null; // {user_id, role, display_name}
+let profile = null; // {user_id, role, display_name, login_id}
+let person = null;  // the people row whose employee number matches this login
 const isSup = () => profile && (profile.role === 'supervisor' || profile.role === 'admin');
 const isAdmin = () => profile && profile.role === 'admin';
 
@@ -113,37 +114,53 @@ async function loadProfile() {
   profile = null;
   if (!session) return;
   const uid = session.user.id;
+  const loginId = String(session.user.email || '').split('@')[0];
   let rows = await q(sb.from('profiles').select('*').eq('user_id', uid));
   if (!rows.length) {
-    await q(sb.from('profiles').insert({ user_id: uid, role: 'tablet', display_name: '' }));
+    await q(sb.from('profiles').insert({ user_id: uid, role: 'tablet', display_name: '', login_id: loginId }));
     rows = await q(sb.from('profiles').select('*').eq('user_id', uid));
   }
   profile = rows[0];
+  // The employee number is the login id. The admin People tab holds the name that goes with it.
+  person = null;
+  try {
+    const ps = await q(sb.from('people').select('id,name,active,employee_number').ilike('employee_number', loginId));
+    person = ps[0] || null;
+  } catch (e) { person = null; }
+}
+// Inactive employees keep their history but can no longer sign in.
+async function blockIfInactive() {
+  if (person && person.active === false) {
+    await sb.auth.signOut();
+    session = null; profile = null; person = null;
+    renderLogin('This employee number is inactive. See a supervisor.');
+    return true;
+  }
+  return false;
 }
 
-// ------------------------------------------------------------------ tablet worker (shared tablets)
-const WKEY = 'fuse.worker', DKEY = 'fuse.tabletDept', PKEY = 'fuse.pendingRoute';
+// ------------------------------------------------------------------ who is working (the person who signed in)
+const DKEY = 'fuse.tabletDept', PKEY = 'fuse.pendingRoute';
 let lastActivity = Date.now();
+// Everything logged is recorded under the signed-in person's display name (set by an admin on Admin > Logins).
 function getWorker() {
-  try {
-    const w = JSON.parse(localStorage.getItem(WKEY) || 'null');
-    if (w && Date.now() - (w.at || 0) < IDLE_MS) return w;
-  } catch (e) { /* ignore */ }
-  return null;
+  if (!profile || !session) return null;
+  const name = (person && person.name) || (profile.display_name || '').trim() || String(session.user.email || '').split('@')[0];
+  return name ? { name } : null;
 }
-function setWorker(name) { localStorage.setItem(WKEY, JSON.stringify({ name, at: Date.now() })); }
-function clearWorker() { localStorage.removeItem(WKEY); }
-function touch() {
-  lastActivity = Date.now();
-  const w = getWorker();
-  if (w) { w.at = lastActivity; localStorage.setItem(WKEY, JSON.stringify(w)); }
-}
+function query() { return new URLSearchParams((location.hash.split('?')[1]) || ''); }
+function isFloorRoute(p) { p = p || currentPath(); return p.startsWith('/floor') || p.startsWith('/m/'); }
+// Tablet logins can only use the tablet screens (checks, machine list, shop map).
+const tabletAllowed = (p) => isFloorRoute(p) || p === '/map';
+
+function touch() { lastActivity = Date.now(); }
 ['pointerdown', 'keydown', 'touchstart'].forEach((ev) => window.addEventListener(ev, touch, { passive: true }));
-setInterval(() => {
-  const raw = localStorage.getItem(WKEY);
-  if (raw && !getWorker()) {
-    clearWorker();
-    if (isFloorRoute()) { toast('Signed out for inactivity. Pick your name to continue.'); location.hash = '#/floor'; }
+// Tablet logins sign themselves out after a period with no use, so the next person signs in as themselves.
+setInterval(async () => {
+  if (session && profile && profile.role === 'tablet' && Date.now() - lastActivity > IDLE_MS) {
+    await sb.auth.signOut();
+    session = null; profile = null; location.hash = '#/'; render();
+    toast('Signed out for inactivity.');
   }
 }, 20000);
 const tabletDept = () => localStorage.getItem(DKEY) || '';
@@ -195,13 +212,14 @@ async function render() {
   if (!profile) {
     try { await loadProfile(); } catch (e) { app.innerHTML = `<div class="main"><div class="err">${esc(errMsg(e))}</div></div>`; return; }
   }
+  if (await blockIfInactive()) return;
   let path = currentPath();
   if (path === '/') { location.replace('#' + (profile.role === 'tablet' ? '/floor' : '/dash')); return; }
+  if (profile.role === 'tablet' && !tabletAllowed(path)) { location.replace('#/floor'); return; }
   for (const r of routes) {
     const m = path.match(r.re);
     if (!m) continue;
     if (r.opts.sup && !isSup()) { app.innerHTML = officeShell('', '<div class="err">Only supervisors can open this page.</div>'); return; }
-    if (r.opts.worker && !getWorker()) { sessionStorage.setItem(PKEY, location.hash); location.replace('#/floor'); return; }
     window.scrollTo(0, 0);
     try { await r.fn(...m.slice(1).map((x) => (x == null ? x : decodeURIComponent(x)))); }
     catch (e) { console.error(e); app.innerHTML = (isFloorRoute(path) ? floorShell('', '') : officeShell('', '')).replace('<!--BODY-->', `<div class="err">Something went wrong: ${esc(errMsg(e))}</div><a class="btn" href="#/">Start over</a>`); }
@@ -223,7 +241,7 @@ function officeShell(active, body, badge) {
   if (isSup()) nav.push(['/admin', 'Admin']);
   return `<div class="office">
   <nav class="side" aria-label="Main">
-    <div class="brand"><a href="#/dash" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a><span>Maintenance</span></div>
+    <div class="brand"><a href="#/dash" class="homelogo" aria-label="Fuse Fabrication &amp; Machine – home"><img src="logo-fuse.png" alt="Fuse Fabrication &amp; Machine"></a><span>Asset Maintenance</span></div>
     ${nav.map(([h, t]) => `<a href="#${h}" class="${active === h ? 'on' : ''}">${t}${h === '/exceptions' && badge ? `<span class="chip c-warn">${badge}</span>` : ''}</a>`).join('')}
     <div class="foot"><span>${esc(session.user.email)} · ${esc(profile.role)}</span><button type="button" data-signout>Sign out</button></div>
   </nav>
@@ -238,21 +256,19 @@ function floorShell(back, body) {
       <div class="tiny" style="color:#D6D3D1">${esc(tabletDept() ? tabletDept() + ' tablet' : 'Shop floor')}</div>
     </div>
     <div class="row" style="gap:16px">
-      ${w ? `<span class="who">Working as <b>${esc(w.name)}</b></span><button type="button" class="link" data-notyou>Not you?</button>` : ''}
+      ${w ? `<span class="who">Signed in as <b>${esc(w.name)}</b></span>` : ''}
       ${currentPath() !== '/map' ? '<a href="#/map">Shop map</a>' : '<a href="#/floor/pick">Machine list</a>'}
       ${isSup() || profile.role !== 'tablet' ? '<a href="#/dash">Office view</a>' : ''}
-      ${!w ? '<button type="button" class="link" data-signout>Sign out tablet</button>' : ''}
+      <button type="button" class="link" data-signout>Sign out</button>
     </div>
   </header>
   <main class="fmain">${back ? `<a href="${back}" style="font-weight:600;text-decoration:none">← Back</a>` : ''}${body || '<!--BODY-->'}</main></div>`;
 }
 document.addEventListener('click', async (e) => {
   if (e.target.closest('[data-signout]')) {
-    clearWorker();
     await sb.auth.signOut();
     session = null; profile = null; location.hash = '#/'; render();
   }
-  if (e.target.closest('[data-notyou]')) { e.preventDefault(); clearWorker(); location.hash = '#/floor'; }
 });
 async function exceptionBadge() {
   try {
@@ -262,22 +278,23 @@ async function exceptionBadge() {
 }
 
 // ------------------------------------------------------------------ login
-function renderLogin() {
+function renderLogin(notice) {
   app.innerHTML = `<div class="floor"><header class="fhead"><div class="row"><div class="logo">${ICON}</div>
-    <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px">Fuse Fabrication · Maintenance</div></div></header>
+    <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px">Fuse Fabrication · Asset Maintenance</div></div></header>
   <main class="fmain" style="max-width:440px"><h1>Sign in</h1>
   <form id="login" class="card stack">
-    <label>Email<input name="email" type="email" autocomplete="username" required></label>
+    ${notice ? `<div class="err" role="alert">${esc(notice)}</div>` : ''}
+    <label>Employee number<input name="email" type="text" inputmode="text" autocomplete="username" autocapitalize="off" required></label>
     <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
     <button class="btn primary" type="submit">Sign in</button>
-    <p class="muted small" style="margin:0">Shop-floor tablets sign in once with the shared tablet login. People pick their own name each time they log maintenance.</p>
+    <p class="muted small" style="margin:0">Sign in with your employee number. Your name is recorded on everything you log.</p>
   </form></main></div>`;
   $('#login').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = formData(e.target);
     const btn = $('button[type=submit]', e.target);
     await busy(btn, async () => {
-      const { data, error } = await sb.auth.signInWithPassword({ email: f.email, password: f.password });
+      const { data, error } = await sb.auth.signInWithPassword({ email: String(f.email).trim().includes('@') ? String(f.email).trim() : String(f.email).trim().toLowerCase() + '@' + (window.FUSE_CONFIG.loginDomain || 'fuse.example.com'), password: f.password });
       if (error) throw error;
       session = data.session; profile = null;
       await render();
@@ -980,15 +997,16 @@ route('/admin(?:/(people|checklists|machines|holidays|logins))?', async (tab) =>
   } else if (tab === 'people') {
     const people = await q(sb.from('people').select('*').order('name'));
     content = `<section class="card"><h2>Add a person</h2><form id="pf" class="row" style="align-items:flex-end">
+      <label>Employee #<input name="employee_number" required autocapitalize="off" style="max-width:120px"></label>
       <label style="flex:1 1 220px">Full name<input name="name" required></label>
       <label>Department<select name="department"><option value="">—</option>${core.depts.map((d) => `<option>${esc(d)}</option>`).join('')}</select></label>
       <label>Role<input name="role_label" value="Operator"></label><button class="btn primary" type="submit">Add</button></form></section>
-    <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
-    ${people.map((p) => `<tr><td style="font-weight:600">${esc(p.name)}</td>
+    <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Employee #</th><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+    ${people.map((p) => `<tr><td><input data-pnum="${p.id}" value="${esc(p.employee_number || '')}" aria-label="Employee number for ${esc(p.name)}" style="max-width:110px"></td><td style="font-weight:600">${esc(p.name)}</td>
       <td><select data-pdept="${p.id}" aria-label="Department for ${esc(p.name)}"><option value="">—</option>${core.depts.map((d) => `<option ${d === p.department ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></td>
       <td>${esc(p.role_label)}</td>
       <td>${!p.confirmed ? chip('Added on a tablet – confirm', 'c-acc') : p.active ? chip('Active', 'c-ok') : chip('Inactive', 'c-grey')}</td>
-      <td class="row" style="gap:6px">${!p.confirmed ? `<button class="btn sm" data-pconf="${p.id}">Confirm</button>` : ''}<button class="btn sm" data-pact="${p.id}" data-on="${p.active ? 0 : 1}">${p.active ? 'Deactivate' : 'Activate'}</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">No names yet. Add the people who do maintenance so they can pick their name on the tablet.</td></tr>'}
+      <td class="row" style="gap:6px">${!p.confirmed ? `<button class="btn sm" data-pconf="${p.id}">Confirm</button>` : ''}<button class="btn sm" data-pact="${p.id}" data-on="${p.active ? 0 : 1}">${p.active ? 'Deactivate' : 'Activate'}</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No people yet. Add each employee with their employee number. Deactivate (never delete) anyone who leaves: they cannot sign in, and their history stays.</td></tr>'}
     </tbody></table></div></section>`;
   } else if (tab === 'holidays') {
     const hol = await q(sb.from('holidays').select('*').order('day', { ascending: false }));
@@ -998,10 +1016,12 @@ route('/admin(?:/(people|checklists|machines|holidays|logins))?', async (tab) =>
     ${hol.map((h) => `<tr><td>${fmtDate(h.day)}</td><td>${esc(h.name)}</td><td><button class="btn sm danger" data-hdel="${h.day}">Remove</button></td></tr>`).join('') || '<tr><td colspan="3" class="muted">None yet.</td></tr>'}</tbody></table></div></section>`;
   } else if (tab === 'logins') {
     const profs = await q(sb.from('profiles').select('*').order('created_at'));
-    content = `<section class="card"><p class="small muted" style="margin-top:0">Logins are created in Supabase (Authentication → Users → Add user). Each one shows up here after its first sign-in. Set the role here.</p></section>
+    const ppl = await q(sb.from('people').select('name,employee_number,active'));
+    const byNum = {}; ppl.forEach((x) => { if (x.employee_number) byNum[x.employee_number.toLowerCase()] = x; });
+    content = `<section class="card"><p class="small muted" style="margin-top:0">Create each login in Supabase (Authentication → Users → Add user) with the email <b>employee number@fuse.example.com</b> (for example 1042@fuse.example.com) and a password. It shows up here after the first sign-in. Add the same employee number on the People tab with the person's name; that name is recorded on everything they log. Set the role here (tablet logins can only use the tablet screens). To stop someone signing in, deactivate them on People.</p></section>
     <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Login</th><th>Display name</th><th>Role</th><th></th></tr></thead><tbody>
-    ${profs.map((p) => `<tr><td class="small">${p.user_id === session.user.id ? esc(session.user.email) + ' (you)' : '<span class="muted">' + esc(p.user_id) + '</span>'}</td>
-      <td><input data-pname="${p.user_id}" value="${esc(p.display_name)}" aria-label="Display name"></td>
+    ${profs.map((p) => `<tr><td class="small">${p.user_id === session.user.id ? esc(session.user.email) + ' (you)' : '<b>' + esc(p.login_id || '—') + '</b>'}${p.user_id === session.user.id ? '' : ''}</td>
+      <td>${esc((byNum[String(p.login_id || '').toLowerCase()] || {}).name || '— no matching employee number in People —')}<input type="hidden" data-pname="${p.user_id}" value="${esc(p.display_name)}"></td>
       <td><select data-prole="${p.user_id}" aria-label="Role">${['tablet', 'supervisor', 'admin'].map((r) => `<option ${r === p.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
       <td><button class="btn sm" data-psave="${p.user_id}">Save</button></td></tr>`).join('')}</tbody></table></div></section>`;
   }
@@ -1011,9 +1031,10 @@ route('/admin(?:/(people|checklists|machines|holidays|logins))?', async (tab) =>
   if (tab === 'people') {
     $('#pf').addEventListener('submit', (e) => {
       e.preventDefault(); const f = formData(e.target);
-      busy($('button', e.target), async () => { await q(sb.from('people').insert({ name: f.name, department: f.department || null, role_label: f.role_label || 'Operator', confirmed: true })); toast('Added'); render(); });
+      busy($('button', e.target), async () => { await q(sb.from('people').insert({ employee_number: f.employee_number.trim(), name: f.name, department: f.department || null, role_label: f.role_label || 'Operator', confirmed: true })); toast('Added'); render(); });
     });
     $$('[data-pdept]').forEach((s) => s.addEventListener('change', async () => { try { await q(sb.from('people').update({ department: s.value || null }).eq('id', s.dataset.pdept)); toast('Saved'); } catch (e) { toast(errMsg(e), true); } }));
+    $$('[data-pnum]').forEach((i) => i.addEventListener('change', async () => { try { await q(sb.from('people').update({ employee_number: i.value.trim() || null }).eq('id', i.dataset.pnum)); toast('Saved'); } catch (e) { toast(errMsg(e), true); } }));
     $$('[data-pconf]').forEach((b) => b.addEventListener('click', () => busy(b, async () => { await q(sb.from('people').update({ confirmed: true }).eq('id', b.dataset.pconf)); render(); })));
     $$('[data-pact]').forEach((b) => b.addEventListener('click', () => busy(b, async () => { await q(sb.from('people').update({ active: b.dataset.on === '1', confirmed: true }).eq('id', b.dataset.pact)); render(); })));
   }
@@ -1417,59 +1438,11 @@ route('/map', async () => {
 
 // ================================================================== SHOP FLOOR (tablet)
 
-// Who's working?
+// Landing: no name picker any more. The person is whoever signed in.
 route('/floor', async () => {
-  app.innerHTML = floorShell('', '<div class="loading">Loading…</div>');
-  await loadCore();
-  const people = await q(sb.from('people').select('*').eq('active', true).order('name'));
-  const dept = tabletDept();
-  let showAll = !dept;
-  const pending = sessionStorage.getItem(PKEY);
-  const pendingId = pending && pending.startsWith('#/m/') ? decodeURIComponent(pending.slice(4).split('/')[0]) : '';
-  const body = `
-  <div class="row" style="justify-content:space-between;align-items:flex-end">
-    <div><h1>Who's doing the maintenance?</h1><p class="muted" style="margin:6px 0 0">Tap your name. Everything you log on this tablet is recorded under it.</p></div>
-    <label class="small">This tablet is in<select id="tdept"><option value="">No department</option>${core.depts.map((d) => `<option ${d === dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
-  </div>
-  ${pendingId ? `<div class="notice">After you pick your name you'll go straight to <b>${esc(pendingId)}</b>${core.assetById[pendingId] ? ' · ' + esc(core.assetById[pendingId].name) : ''}.</div>` : ''}
-  <label class="sr" for="psearch">Find your name</label><input id="psearch" type="search" placeholder="Find your name" style="height:56px;font-size:17px">
-  <div id="plist" class="grid g3"></div>
-  <button type="button" class="btn" id="pall" style="align-self:flex-start"></button>
-  <section class="card stack"><h2 style="margin:0;font-size:17px">Not on the list?</h2>
-    <form id="newp" class="row"><label class="sr" for="newname">Type your full name</label><input id="newname" name="name" required placeholder="Type your full name" style="flex:1 1 260px;height:52px;font-size:17px"><button class="btn dark" type="submit" style="height:52px">Continue</button></form>
-    <span class="small muted">Your name is added to the list and a supervisor confirms it.</span></section>
-  <p class="small muted" style="margin:0">After ${CFG.idleMinutes || 10} minutes without use, this tablet comes back here so the next person picks their own name.</p>`;
-  app.innerHTML = floorShell('', body);
-  const draw = () => {
-    const t = $('#psearch').value.trim().toLowerCase();
-    let list = people.filter((p) => !t || p.name.toLowerCase().includes(t));
-    if (!showAll && !t) list = list.filter((p) => p.department === dept);
-    $('#plist').innerHTML = list.map((p) => `<button type="button" class="person" data-name="${esc(p.name)}"><span class="avatar">${esc(initials(p.name))}</span><span><span style="display:block;font-size:17px;font-weight:600">${esc(p.name)}</span><span class="small muted">${esc([p.role_label, p.department].filter(Boolean).join(' · '))}</span></span></button>`).join('')
-      || `<p class="muted">${people.length ? 'No names match.' : 'No names have been added yet. Type your name below.'}</p>`;
-    $('#pall').hidden = !dept || !!t;
-    $('#pall').textContent = showAll ? `Show only ${dept}` : 'Show everyone';
-    $$('#plist [data-name]').forEach((b) => b.addEventListener('click', () => pick(b.dataset.name)));
-  };
-  const pick = (name) => {
-    setWorker(name);
-    const next = sessionStorage.getItem(PKEY);
-    sessionStorage.removeItem(PKEY);
-    location.hash = next || '#/floor/pick';
-  };
-  draw();
-  $('#psearch').addEventListener('input', draw);
-  $('#pall').addEventListener('click', () => { showAll = !showAll; draw(); });
-  $('#tdept').addEventListener('change', (e) => { localStorage.setItem(DKEY, e.target.value); render(); });
-  $('#newp').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = formData(e.target).name.replace(/\s+/g, ' ');
-    busy($('button', e.target), async () => {
-      if (!people.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
-        await q(sb.from('people').insert({ name, department: dept || null, confirmed: false }));
-      }
-      pick(name);
-    });
-  });
+  const next = sessionStorage.getItem(PKEY);
+  sessionStorage.removeItem(PKEY);
+  location.replace(next || '#/floor/pick');
 });
 
 // Pick a machine
@@ -1561,7 +1534,7 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
         : `<div class="yn" role="group" aria-label="Item ${it.seq}"><button type="button" class="yes" data-a="yes" aria-pressed="false">Yes</button><button type="button" class="no" data-a="no" aria-pressed="false">No</button></div>`}</div>
       <label class="t-bad" data-note hidden style="padding-left:36px">${it.input_type === 'number' ? 'Reading is outside the range. What did you find? (required)' : 'What did you find? (required)'}<textarea rows="2" style="font-weight:400;color:var(--ink)"></textarea></label></div>`).join('')}
     <label>Other notes (optional)<textarea name="notes" rows="2"></textarea></label>
-    <p class="small muted" style="margin:0">Submitting as <b>${esc(w.name)}</b> · <a href="#" data-notyou>Not you?</a></p>
+    <p class="small muted" style="margin:0">Submitting as <b>${esc(w.name)}</b></p>
     <button class="btn primary big" type="submit" id="sub" disabled>Submit check</button>
   </form>`;
   app.innerHTML = floorShell('#/m/' + encodeURIComponent(id), body);
@@ -1583,6 +1556,7 @@ route('/m/([^/?]+)/check/([0-9a-f-]{36})', async (id, cid) => {
       const itx = items.find((x) => x.seq === seq);
       const fail = v !== (itx && itx.pass_answer === 'no' ? 'no' : 'yes');
       ans[seq] = { answer: fail ? 'no' : 'yes', response: v, note: (ans[seq] && ans[seq].note) || '' };
+      $$('[data-a]', box).forEach((x) => { x.classList.toggle('ok', x === b && !fail); x.classList.toggle('bad', x === b && fail); });
       box.classList.toggle('no', fail);
       const nl = $('[data-note]', box);
       nl.hidden = !fail;
@@ -1653,7 +1627,7 @@ route('/m/([^/?]+)/skip/([0-9a-f-]{36})', async (id, cid) => {
       ${Object.entries(SKIP_REASONS).map(([k, v]) => `<label class="choice"><input type="radio" name="reason" value="${k}" required ${k === 'machine_down' && a.status === 'down' ? 'checked' : ''}> ${v}</label>`).join('')}</fieldset>
     <label>Add a note (required)<textarea name="note" rows="3" required></textarea></label>
     <label>Will it be made up?<select name="makeup" style="height:56px"><option>Yes, later today</option><option>Yes, next shift</option><option>Yes, tomorrow</option><option>No</option><option value="">Not sure</option></select></label>
-    <p class="small muted" style="margin:0">Skipping as <b>${esc(w.name)}</b> · <a href="#" data-notyou>Not you?</a></p>
+    <p class="small muted" style="margin:0">Skipping as <b>${esc(w.name)}</b></p>
     <div class="row"><button class="btn primary big" type="submit">Submit skip</button><a class="btn big" href="#/m/${encodeURIComponent(id)}/check/${cid}">Do the check instead</a></div>
   </form>`);
   $('#skf').addEventListener('submit', (e) => {
@@ -1682,7 +1656,7 @@ route('/m/([^/?]+)/problem', async (id) => {
     <label>What kind of problem?<select name="category" style="height:56px">${PROBLEM_CATS.map((c) => `<option>${c}</option>`).join('')}</select></label>
     <label>What happened? (required)<textarea name="description" rows="4" required></textarea></label>
     <label class="choice"><input type="checkbox" name="loto"> Machine is locked out / tagged out</label>
-    <p class="small muted" style="margin:0">Reporting as <b>${esc(w.name)}</b> · <a href="#" data-notyou>Not you?</a></p>
+    <p class="small muted" style="margin:0">Reporting as <b>${esc(w.name)}</b></p>
     <button class="btn primary big" type="submit">Send report</button>
   </form>`);
   $$('[data-s]').forEach((b) => b.addEventListener('click', () => { st = b.dataset.s; $$('[data-s]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); }));
@@ -1713,7 +1687,7 @@ route('/m/([^/?]+)/log', async (id) => {
     <label>Details<textarea name="notes" rows="3"></textarea></label>
     <label>Date<input type="date" name="done_on" value="${shopToday()}" max="${shopToday()}" required style="height:56px"></label>
     ${a.status !== 'running' ? `<label class="choice"><input type="checkbox" name="back"> ${esc(a.id)} is fixed – mark it Running</label>` : ''}
-    <p class="small muted" style="margin:0">Logging as <b>${esc(w.name)}</b> · <a href="#" data-notyou>Not you?</a></p>
+    <p class="small muted" style="margin:0">Logging as <b>${esc(w.name)}</b></p>
     <button class="btn primary big" type="submit">Save</button>
   </form>`);
   $('#lwf').addEventListener('submit', (e) => {
