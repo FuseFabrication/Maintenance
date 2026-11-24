@@ -1503,10 +1503,10 @@ route('/floor/pick', async () => {
   const doneN = list.filter((a) => dailyState(a).st === 'done').length;
   const dueN = list.filter((a) => ['done', 'due', 'skipped'].includes(dailyState(a).st)).length;
   const body = `
-  <div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>What are you checking?</h1><p class="muted" style="margin:6px 0 0">Scan the QR label on the machine, pick a department, find it on the shop map, or type the machine tag.</p></div></div>
-  <div class="row" style="gap:10px;flex-wrap:wrap"><button type="button" class="btn primary big" id="scanbtn">Scan QR code</button><a class="btn primary big" href="#/floor/dept">Pick by department</a><a class="btn primary big" href="#/map">Pick on the shop map</a></div>
-  <form id="tagf" class="card row"><label for="tag" style="flex:1 1 260px">Machine tag<input id="tag" name="tag" placeholder="e.g. PB-001 or FUSE-PB-001" autocomplete="off" style="height:56px;font-size:19px;text-transform:uppercase"></label><button class="btn dark big" type="submit" style="align-self:flex-end;height:56px">Go</button></form>
-  <div class="row" style="justify-content:space-between"><h2>${esc(dept || 'All machines')}</h2><span class="small muted">${dueN ? `${doneN} of ${dueN} daily checks done today` : ''}</span></div>
+  <div style="text-align:center"><h1>What are you checking?</h1><p class="muted" style="margin:6px auto 0;max-width:640px">Scan the QR label on the machine, pick a department, find it on the shop map, or type the machine tag.</p></div>
+  <div class="row" style="gap:10px;flex-wrap:wrap;justify-content:center"><button type="button" class="btn primary big" id="scanbtn">Scan QR code</button><a class="btn primary big" href="#/floor/dept">Pick by department</a><a class="btn primary big" href="#/map">Pick on the shop map</a></div>
+  <form id="tagf" class="card row" style="justify-content:center;width:100%;max-width:560px;margin-left:auto;margin-right:auto"><label for="tag" style="flex:1 1 260px">Machine tag<input id="tag" name="tag" placeholder="e.g. PB-001 or FUSE-PB-001" autocomplete="off" style="height:56px;font-size:19px;text-transform:uppercase"></label><button class="btn dark big" type="submit" style="align-self:flex-end;height:56px">Go</button></form>
+  <div class="row" style="justify-content:center;gap:16px"><h2>${esc(dept || 'All machines')}</h2><span class="small muted">${dueN ? `${doneN} of ${dueN} daily checks done today` : ''}</span></div>
   <div class="tiles">${list.map((a) => {
     const ds = dailyState(a);
     const otherDue = a.checks.filter((c) => c.frequency !== 'daily' && c.state === 'due');
@@ -1517,8 +1517,8 @@ route('/floor/pick', async () => {
       <span style="margin-top:auto;font-weight:700;font-size:14px" class="${ds.cls}">${esc(ds.text)}</span>
       ${otherDue.length ? `<span class="tiny t-warn" style="font-weight:600">${otherDue.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : ''}</a>`;
   }).join('') || '<p class="muted">No machines in this department.</p>'}</div>
-  <p class="small muted" style="margin:0">Shared machines like cranes and forklifts show in every department that uses them. They only need one check, so if someone already did it, it shows as done for everyone.</p>
-  <div class="row" style="padding-top:8px;border-top:1px solid var(--line)"><span class="small muted">Different department?</span>
+  <p class="small muted" style="margin:0;text-align:center">Shared machines like cranes and forklifts show in every department that uses them. They only need one check, so if someone already did it, it shows as done for everyone.</p>
+  <div class="row" style="padding-top:8px;border-top:1px solid var(--line);justify-content:center"><span class="small muted">Different department?</span>
     ${['', ...core.depts].map((d) => `<a class="pill" aria-pressed="${d === dept}" href="#/floor/pick?dept=${encodeURIComponent(d)}" style="display:inline-flex;align-items:center;height:44px">${esc(d || 'All')}</a>`).join('')}</div>`;
   app.innerHTML = floorShell('', body);
   $('#scanbtn').addEventListener('click', () => scanQr((text) => {
