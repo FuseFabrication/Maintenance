@@ -1342,8 +1342,8 @@ const PIN = {
 // Vehicles and trailers draw as small top-down shapes at real size (feet), pointing along +x, rotated by assets.map_rot.
 // Sizes are typical overall length x width for each unit (trailers include the tongue).
 const ROAD_SIZE = {
-  'FUSE-VEH-1000': [19.5, 6.7], 'FUSE-VEH-1030': [22, 7.5], 'FUSE-VEH-1040': [22, 7.5], 'FUSE-VEH-1050': [23, 8],
-  'FUSE-VEH-1060': [19.5, 6.9], 'FUSE-VEH-1070': [21, 6.8], 'FUSE-VEH-1080': [17.6, 6.7],
+  'FUSE-VEH-1000': [19.5, 6.7], 'FUSE-VEH-1030': [20.5, 7.8], 'FUSE-VEH-1040': [20.5, 7.8], 'FUSE-VEH-1050': [23, 8],
+  'FUSE-VEH-1060': [19.5, 6.9], 'FUSE-VEH-1070': [21, 6.8], 'FUSE-VEH-1080': [17.9, 7],
   'FUSE-TRL-T100': [27, 8.5], 'FUSE-TRL-T200': [22, 7], 'FUSE-TRL-T300': [20, 7.5], 'FUSE-TRL-T400': [12, 6],
   'FUSE-TRL-T500': [24, 8.5], 'FUSE-TRL-T600': [29, 8.5],
 };
@@ -1358,12 +1358,17 @@ function roadShape(a, fill, sw) {
       ${[0.3, 0.5, 0.7].map((f) => `<line x1="${x0 + d * f}" y1="${y0}" x2="${x0 + d * f}" y2="${-y0}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/>`).join('')}
       <rect x="${x0 + d * 0.38}" y="${y0 - 0.5}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/><rect x="${x0 + d * 0.38}" y="${-y0}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/>`;
   }
-  const hood = L * 0.17, cab = L * 0.3;          // hood and cab lengths; the rest is the bed / body
+  const svc = a.asset_type === 'Service Truck';   // single cab with a service body
+  const hood = L * 0.17, cab = L * (svc ? 0.17 : a.asset_type === 'SUV' ? 0.5 : 0.3);   // hood and cab/cabin lengths; the rest is the bed / body
   const bx = x0, bl = L - hood - cab;            // bed at the back
   return `<rect x="${x0}" y="${y0}" width="${L}" height="${W}" rx="${W * 0.18}" fill="${fill}" ${k}/>
-    ${a.asset_type === 'SUV' ? '' : `<rect x="${bx + 0.6}" y="${y0 + 0.6}" width="${bl - 0.9}" height="${W - 1.2}" rx="0.4" fill="#000" fill-opacity=".18"/>`}
+    ${a.asset_type === 'SUV' ? `<rect x="${bx + 0.8}" y="${y0 + 0.9}" width="${bl + cab * 0.5}" height="${W - 1.8}" rx="0.8" fill="#000" fill-opacity=".12"/>`
+      : svc ? `<rect x="${bx + 0.3}" y="${y0 + 0.3}" width="${bl - 0.5}" height="${W * 0.28}" fill="#000" fill-opacity=".22"/><rect x="${bx + 0.3}" y="${-y0 - 0.3 - W * 0.28}" width="${bl - 0.5}" height="${W * 0.28}" fill="#000" fill-opacity=".22"/>
+        ${[0.33, 0.66].map((f) => `<line x1="${bx + bl * f}" y1="${y0 + 0.3}" x2="${bx + bl * f}" y2="${y0 + 0.3 + W * 0.28}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/><line x1="${bx + bl * f}" y1="${-y0 - 0.3}" x2="${bx + bl * f}" y2="${-y0 - 0.3 - W * 0.28}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/>`).join('')}
+        <rect x="${bx + 0.6}" y="${y0 + 0.5 + W * 0.28}" width="${bl - 1.1}" height="${W - 1 - W * 0.56}" fill="#000" fill-opacity=".1"/>`
+      : `<rect x="${bx + 0.6}" y="${y0 + 0.6}" width="${bl - 0.9}" height="${W - 1.2}" rx="0.4" fill="#000" fill-opacity=".18"/>`}
     <rect x="${x0 + bl + cab * 0.62}" y="${y0 + 0.5}" width="${cab * 0.32}" height="${W - 1}" rx="0.5" fill="#BFE0FF" fill-opacity=".9" ${k}/>
-    <rect x="${x0 + bl + 0.3}" y="${y0 + 0.5}" width="${cab * 0.18}" height="${W - 1}" rx="0.4" fill="#BFE0FF" fill-opacity=".7"/>`;
+    ${svc ? '' : `<rect x="${x0 + bl + 0.3}" y="${y0 + 0.5}" width="${cab * 0.18}" height="${W - 1}" rx="0.4" fill="#BFE0FF" fill-opacity=".7"/>`}`;
 }
 // Map "Checks" picker: '' = anything due, otherwise a frequency key.
 // A check is overdue when it is due now and a whole period has been missed since it was last done.
