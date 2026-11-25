@@ -629,7 +629,7 @@ route('/machine/([^/?]+)', async (id) => {
     q(sb.from('maintenance_logs').select('*').eq('asset_id', id).order('created_at', { ascending: false }).limit(60)),
     q(sb.from('corrections').select('*').eq('asset_id', id).order('created_at', { ascending: false })),
     q(sb.from('checklist_revisions').select('checklist_id,revision,change_note,approved_by,effective_date,created_at').order('revision', { ascending: false })),
-    q(sb.from('asset_manuals').select('*').eq('asset_id', id).order('doc_type').order('title')),
+    Promise.all([q(sb.from('asset_manuals').select('*').eq('asset_id', id)), q(sb.from('asset_manual_links').select('manual:asset_manuals(*)').eq('asset_id', id))]).then(([own, lk]) => [...own, ...lk.map((x) => ({ ...x.manual, sharedFrom: x.manual.asset_id }))].sort((x, y) => (x.doc_type + x.title).localeCompare(y.doc_type + y.title))),
   ]);
   const corrFor = (type, rid) => corr.filter((c) => c.target_type === type && c.target_id === rid);
   const corrHtml = (type, rid) => corrFor(type, rid).map((c) => `<div class="small" style="margin-top:6px;padding:8px 10px;background:var(--warn-bg);border-radius:6px"><b>Correction</b> by ${esc(c.corrected_by)}, ${fmtTime(c.created_at)}: ${esc(c.reason)}</div>`).join('');
@@ -674,9 +674,11 @@ route('/machine/([^/?]+)', async (id) => {
       <label>Type<select name="doc_type">${['operator', 'maintenance', 'service', 'parts', 'safety', 'electrical', 'programming', 'other'].map((t) => `<option>${t}</option>`).join('')}</select></label>
       <label>Manual no.<input name="manual_no"></label><label>PDF (max 50 MB)<input name="file" type="file" accept="application/pdf"></label>
       <button class="btn primary" type="submit">Save manual</button></form>` : ''}
-    ${mans.length ? `<div class="tablewrap"><table><thead><tr><th>Manual</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>${mans.map((m) => `<tr><td><div style="font-weight:600">${esc(m.title)}</div><div class="tiny muted">${esc([m.manual_no, m.notes].filter(Boolean).join(' · '))}</div></td>
+    <div id="sharebox" hidden class="card stack" style="margin:6px 22px 14px"></div>
+    ${mans.length ? `<div class="tablewrap"><table><thead><tr><th>Manual</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>${mans.map((m) => `<tr><td><div style="font-weight:600">${esc(m.title)}${m.sharedFrom ? ' ' + chip('Shared from ' + m.sharedFrom, 'c-info') : ''}</div><div class="tiny muted">${esc([m.manual_no, m.notes].filter(Boolean).join(' · '))}</div></td>
       <td class="small">${esc(m.doc_type)}</td><td>${m.storage_path ? chip('PDF on file', 'c-ok') : chip(({ on_file: 'Paper/other copy on file', link_found: 'Link found', purchase_needed: 'Purchase needed', request_from_oem: 'Request from maker', need_make_model: 'Need make/model', not_searched: 'Not searched' })[m.status] || m.status, 'c-grey')}</td>
       <td><div class="row" style="gap:8px">${m.storage_path ? `<button type="button" class="btn sm" data-open="${esc(m.storage_path)}">Open PDF</button>` : /^https?:\/\//.test(m.url || '') ? `<a class="btn sm" href="${esc(m.url)}" target="_blank" rel="noopener">Open link</a>` : ''}
+        ${isSup() && !m.sharedFrom ? `<button type="button" class="btn sm" data-share="${esc(m.id)}">Share with machines…</button>` : ''}
         ${isSup() ? `<label class="btn sm" style="cursor:pointer">${m.storage_path ? 'Replace PDF' : 'Upload PDF'}<input type="file" accept="application/pdf" data-up="${esc(m.id)}" hidden></label>` : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No manuals listed yet.</p>'}
   </section>
 
@@ -727,6 +729,26 @@ route('/machine/([^/?]+)', async (id) => {
     if (error) { toast(errMsg(error), true); return; }
     const w = window.open('about:blank', '_blank');
     if (w) { w.opener = null; w.location.href = data.signedUrl; } else { location.href = data.signedUrl; }
+  }));
+  $$('[data-share]').forEach((b) => b.addEventListener('click', async () => {
+    const m = mans.find((x) => x.id === b.dataset.share);
+    const cur = new Set((await q(sb.from('asset_manual_links').select('asset_id').eq('manual_id', m.id))).map((r) => r.asset_id));
+    const sameModel = (x) => a.model && x.model === a.model && x.manufacturer === a.manufacturer;
+    const list = core.assets.filter((x) => x.id !== id).sort((x, y) => (sameModel(y) - sameModel(x)) || x.id.localeCompare(y.id));
+    const box = $('#sharebox'); box.hidden = false;
+    box.innerHTML = `<div class="row" style="justify-content:space-between"><b>Machines that also use: ${esc(m.title)}</b><span class="small muted">One PDF is kept; these machines will show it too.</span></div>
+      <div class="row"><button type="button" class="btn sm" id="shsame">Tick all ${esc([a.manufacturer, a.model].filter(Boolean).join(' '))} machines</button><button type="button" class="btn sm" id="shnone">Clear</button></div>
+      <div style="max-height:260px;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px">${list.map((x) => `<label style="flex-direction:row;align-items:center;gap:8px;font-weight:500"><input type="checkbox" data-sh="${esc(x.id)}" ${cur.has(x.id) ? 'checked' : ''} style="width:20px;height:20px"> <span>${esc(x.id.replace(/^FUSE-/, ''))} · ${esc(x.name)}</span></label>`).join('')}</div>
+      <div class="row"><button type="button" class="btn primary" id="shsave">Save</button><button type="button" class="btn" id="shcancel">Cancel</button></div>`;
+    $('#shsame', box).addEventListener('click', () => list.filter(sameModel).forEach((x) => { box.querySelector(`[data-sh="${CSS.escape(x.id)}"]`).checked = true; }));
+    $('#shnone', box).addEventListener('click', () => $$('[data-sh]', box).forEach((c) => { c.checked = false; }));
+    $('#shcancel', box).addEventListener('click', () => { box.hidden = true; });
+    $('#shsave', box).addEventListener('click', (ev) => busy(ev.target, async () => {
+      const ids = $$('[data-sh]', box).filter((c) => c.checked).map((c) => c.dataset.sh);
+      await q(sb.from('asset_manual_links').delete().eq('manual_id', m.id));
+      if (ids.length) await q(sb.from('asset_manual_links').insert(ids.map((aid) => ({ manual_id: m.id, asset_id: aid }))));
+      toast(`Shared with ${ids.length} machine${ids.length === 1 ? '' : 's'}`); render();
+    }));
   }));
   $$('[data-up]').forEach((inp) => inp.addEventListener('change', () => {
     const file = inp.files[0]; if (!file) return;
