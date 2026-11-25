@@ -640,6 +640,13 @@ route('/machine/([^/?]+)', async (id) => {
     q(sb.from('checklist_revisions').select('checklist_id,revision,change_note,approved_by,effective_date,created_at').order('revision', { ascending: false })),
     Promise.all([q(sb.from('asset_manuals').select('*').eq('asset_id', id)), q(sb.from('asset_manual_links').select('manual:asset_manuals(*)').eq('asset_id', id))]).then(([own, lk]) => [...own, ...lk.map((x) => ({ ...x.manual, sharedFrom: x.manual.asset_id }))].sort((x, y) => (x.doc_type + x.title).localeCompare(y.doc_type + y.title))),
   ]);
+  // Mileage log: odometer readings entered on the pre-trip ("Odometer reading", unit mi), oldest first.
+  const miles = [];
+  if (allCl.some((c) => c.frequency === 'daily') && id.startsWith('FUSE-VEH-')) {
+    const rows = await q(sb.from('inspections').select('performed_at,performed_by,answers').eq('asset_id', id).order('performed_at'));
+    rows.forEach((r) => (r.answers || []).forEach((x) => { if (/odometer/i.test(x.prompt || '') && x.value != null) miles.push({ at: r.performed_at, by: r.performed_by, odo: Number(x.value) }); }));
+    miles.forEach((m, i) => { m.diff = i ? m.odo - miles[i - 1].odo : null; });
+  }
   const corrFor = (type, rid) => corr.filter((c) => c.target_type === type && c.target_id === rid);
   const corrHtml = (type, rid) => corrFor(type, rid).map((c) => `<div class="small" style="margin-top:6px;padding:8px 10px;background:var(--warn-bg);border-radius:6px"><b>Correction</b> by ${esc(c.corrected_by)}, ${fmtTime(c.created_at)}: ${esc(c.reason)}</div>`).join('');
   const corrBtn = (type, rid) => isSup() ? `<button type="button" class="btn sm" data-correct="${type}:${rid}">Add correction</button>` : '';
@@ -677,6 +684,12 @@ route('/machine/([^/?]+)', async (id) => {
     }).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No checklists yet.</p>'}
   </section>
 
+  ${id.startsWith('FUSE-VEH-') ? `<section class="card flush" aria-labelledby="mlh"><div class="row" style="justify-content:space-between;padding:18px 22px 6px"><h2 id="mlh" style="margin:0">Mileage log</h2>
+    ${miles.length ? '<button type="button" class="btn sm" id="milecsv">Download CSV</button>' : ''}</div>
+    ${miles.length ? `<p class="small muted" style="padding:0 22px">Latest odometer: <b>${miles[miles.length - 1].odo.toLocaleString()} mi</b> · ${miles.length} reading${miles.length === 1 ? '' : 's'} from the pre-trip check</p>
+    <div class="tablewrap" style="max-height:360px;overflow:auto"><table><thead><tr><th>Date</th><th>Driver</th><th>Odometer (mi)</th><th>Miles since last</th></tr></thead><tbody>
+    ${miles.slice().reverse().map((m) => `<tr><td>${fmtTime(m.at)}</td><td>${esc(m.by)}</td><td>${m.odo.toLocaleString()}</td><td class="${m.diff != null && m.diff < 0 ? 't-bad' : ''}">${m.diff == null ? '—' : m.diff < 0 ? 'Lower than last reading – check' : m.diff.toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="muted" style="padding:0 22px 18px">No odometer readings yet. They come from the pre-trip check.</p>'}</section>` : ''}
   <section class="card flush" aria-labelledby="mnh"><div class="row" style="justify-content:space-between;padding:18px 22px 6px"><h2 id="mnh" style="margin:0">Manuals</h2>
     ${isAdmin() ? '<button type="button" class="btn sm" id="addman">+ Add manual</button>' : ''}</div>
     ${isAdmin() ? `<form id="manf" hidden class="row" style="padding:6px 22px 14px;gap:10px;align-items:flex-end"><label style="flex:1 1 220px">Title<input name="title" required></label>
@@ -735,6 +748,7 @@ route('/machine/([^/?]+)', async (id) => {
     if (error) throw error;
     await q(sb.from('asset_manuals').update({ storage_path: path, status: 'on_file', source: 'fuse_file', updated_at: new Date().toISOString() }).eq('id', manualId));
   };
+  if ($('#milecsv')) $('#milecsv').addEventListener('click', () => csvDownload(`${id}-mileage.csv`, [['Date', 'Driver', 'Odometer (mi)', 'Miles since last'], ...miles.map((m) => [m.at, m.by, m.odo, m.diff == null ? '' : m.diff])]));
   $$('[data-open]').forEach((b) => b.addEventListener('click', async () => {
     const { data, error } = await sb.storage.from(MANUAL_BUCKET).createSignedUrl(b.dataset.open, 3600);
     if (error) { toast(errMsg(error), true); return; }
