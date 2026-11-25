@@ -1,4 +1,5 @@
-/* Fuse Fabrication – Maintenance Log
+/* Mike Lamarca 25Nov2026 mike@acramal.com
+   Fuse Fabrication – Maintenance Log
    Plain JavaScript, no build step. Talks to Supabase (see config.js). */
 (function () {
 'use strict';
@@ -15,7 +16,7 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const FREQ = { daily: 'Daily', semiweekly: 'Twice weekly', weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly', quarterly: 'Quarterly', semiannual: 'Semi-annual', annual: 'Annual', triennial: 'Every 3 years' };
 const FREQ_ORDER = ['daily', 'semiweekly', 'weekly', 'biweekly', 'monthly', 'quarterly', 'semiannual', 'annual', 'triennial'];
-const STATUS = { running: 'Running', limited: 'Limited', down: 'Down', retired: 'Retired' };
+const STATUS = { running: 'Running', limited: 'Limited', down: 'Down', retired: 'Inactive' };
 const STATUS_CHIP = { running: 'c-ok', limited: 'c-warn', down: 'c-bad', retired: 'c-grey' };
 const SKIP_REASONS = { machine_down: 'Machine is down', not_in_use: "Machine isn't being used", no_time: 'No time / short staffed', missing_parts: 'Missing parts or tools', other: 'Other' };
 const KIND = { missed: 'Missed', skipped: 'Skipped', failed: 'Failed item' };
@@ -577,8 +578,9 @@ route('/machines', async () => {
   act.forEach((a) => { counts[a.status] = (counts[a.status] || 0) + 1; });
   const match = (a) => (!st || a.status === st || (st === 'nochecklist' && !a.checks.length))
     && (!text || [a.id, a.name, a.model, a.serial, a.manufacturer, a.cpa_id].join(' ').toLowerCase().includes(text));
+  const inactiveView = st === 'retired';
   const groups = (dept ? [dept] : core.depts).map((d) => {
-    const rows = (dept ? deptAssets(d) : act.filter((a) => a.department === d)).filter(match);
+    const rows = (inactiveView ? core.assets.filter((a) => a.status === 'retired' && a.department === d) : dept ? deptAssets(d) : act.filter((a) => a.department === d)).filter(match);
     if (!rows.length) return '';
     return `<section class="card flush"><div class="row" style="padding:14px 20px;background:#F9F9F7;justify-content:space-between">
       <h2 style="font-size:18px">${esc(d)}</h2><span class="small muted">${rows.length} machines</span></div>
@@ -591,8 +593,8 @@ route('/machines', async () => {
         <td><div style="font-weight:600">${esc(a.name)}</div><div class="tiny muted">${esc([a.manufacturer, a.model].filter(Boolean).join(' · '))}</div>
           ${a.department !== d ? `<div style="margin-top:4px">${chip('Shared', 'c-info')} <span class="tiny muted">owned by ${esc(a.department)}</span></div>` : a.shared.length ? `<div class="tiny muted" style="margin-top:4px">Also used by ${esc(a.shared.join(', '))}</div>` : ''}</td>
         <td>${statusChip(a.status)}</td>
-        <td class="${ds.cls}" style="font-weight:600">${esc(ds.text)}</td>
-        <td>${other.length ? (due.length ? `<span class="t-warn" style="font-weight:600">${due.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : '<span class="t-ok">Up to date</span>') : '<span class="muted">None set up</span>'}</td></tr>`;
+        <td class="${ds.cls}" style="font-weight:600">${inactiveView ? '—' : esc(ds.text)}</td>
+        <td>${inactiveView ? '<span class="muted">Inactive – no checks due</span>' : other.length ? (due.length ? `<span class="t-warn" style="font-weight:600">${due.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : '<span class="t-ok">Up to date</span>') : '<span class="muted">None set up</span>'}</td></tr>`;
       }).join('')}</tbody></table></div></section>`;
   }).join('');
   const body = `<div class="head"><div><h1>Machines</h1><p class="muted" style="margin:4px 0 0">${act.length} machines · ${counts.running} running · ${counts.limited} limited · ${counts.down} down</p></div>
@@ -600,7 +602,7 @@ route('/machines', async () => {
   <form id="mf" class="row">
     <label class="sr" for="mq">Search</label><input id="mq" name="q" type="search" placeholder="Search tag, name, model or serial" value="${esc(qs.get('q') || '')}" style="flex:1 1 260px;max-width:380px">
     <label class="sr" for="md">Department</label><select id="md" name="dept"><option value="">All departments</option>${core.depts.map((d) => `<option ${d === dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
-    <label class="sr" for="ms">Status</label><select id="ms" name="status"><option value="">Any status</option>${['running', 'limited', 'down'].map((s) => `<option value="${s}" ${s === st ? 'selected' : ''}>${STATUS[s]}</option>`).join('')}<option value="nochecklist" ${st === 'nochecklist' ? 'selected' : ''}>No checklist yet</option></select>
+    <label class="sr" for="ms">Status</label><select id="ms" name="status"><option value="">Any status</option>${['running', 'limited', 'down', 'retired'].map((s) => `<option value="${s}" ${s === st ? 'selected' : ''}>${STATUS[s]}</option>`).join('')}<option value="nochecklist" ${st === 'nochecklist' ? 'selected' : ''}>No checklist yet</option></select>
     <button class="btn" type="submit">Filter</button></form>
   ${groups || '<p class="muted">No machines match.</p>'}`;
   app.innerHTML = officeShell('/machines', body, await exceptionBadge());
@@ -619,7 +621,7 @@ route('/machine/([^/?]+)', async (id) => {
   await loadCore();
   const a = core.assetById[id];
   if (!a) { app.innerHTML = officeShell('/machines', `<div class="err">No machine with tag ${esc(id)}.</div>`); return; }
-  const [allCl, insp, skips, probs, chg, logs, corr, revs] = await Promise.all([
+  const [allCl, insp, skips, probs, chg, logs, corr, revs, mans] = await Promise.all([
     q(sb.from('checklists').select('*, checklist_items(count)').eq('asset_id', id).order('created_at')),
     q(sb.from('inspections').select('*').eq('asset_id', id).order('performed_at', { ascending: false }).limit(60)),
     q(sb.from('skips').select('*').eq('asset_id', id).order('created_at', { ascending: false }).limit(60)),
@@ -628,6 +630,7 @@ route('/machine/([^/?]+)', async (id) => {
     q(sb.from('maintenance_logs').select('*').eq('asset_id', id).order('created_at', { ascending: false }).limit(60)),
     q(sb.from('corrections').select('*').eq('asset_id', id).order('created_at', { ascending: false })),
     q(sb.from('checklist_revisions').select('checklist_id,revision,change_note,approved_by,effective_date,created_at').order('revision', { ascending: false })),
+    Promise.all([q(sb.from('asset_manuals').select('*').eq('asset_id', id)), q(sb.from('asset_manual_links').select('manual:asset_manuals(*)').eq('asset_id', id))]).then(([own, lk]) => [...own, ...lk.map((x) => ({ ...x.manual, sharedFrom: x.manual.asset_id }))].sort((x, y) => (x.doc_type + x.title).localeCompare(y.doc_type + y.title))),
   ]);
   const corrFor = (type, rid) => corr.filter((c) => c.target_type === type && c.target_id === rid);
   const corrHtml = (type, rid) => corrFor(type, rid).map((c) => `<div class="small" style="margin-top:6px;padding:8px 10px;background:var(--warn-bg);border-radius:6px"><b>Correction</b> by ${esc(c.corrected_by)}, ${fmtTime(c.created_at)}: ${esc(c.reason)}</div>`).join('');
@@ -666,6 +669,20 @@ route('/machine/([^/?]+)', async (id) => {
     }).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No checklists yet.</p>'}
   </section>
 
+  <section class="card flush" aria-labelledby="mnh"><div class="row" style="justify-content:space-between;padding:18px 22px 6px"><h2 id="mnh" style="margin:0">Manuals</h2>
+    ${isSup() ? '<button type="button" class="btn sm" id="addman">+ Add manual</button>' : ''}</div>
+    ${isSup() ? `<form id="manf" hidden class="row" style="padding:6px 22px 14px;gap:10px;align-items:flex-end"><label style="flex:1 1 220px">Title<input name="title" required></label>
+      <label>Type<select name="doc_type">${['operator', 'maintenance', 'service', 'parts', 'safety', 'electrical', 'programming', 'other'].map((t) => `<option>${t}</option>`).join('')}</select></label>
+      <label>Manual no.<input name="manual_no"></label><label>PDF (max 50 MB)<input name="file" type="file" accept="application/pdf"></label>
+      <button class="btn primary" type="submit">Save manual</button></form>` : ''}
+    <div id="sharebox" hidden class="card stack" style="margin:6px 22px 14px"></div>
+    ${mans.length ? `<div class="tablewrap"><table><thead><tr><th>Manual</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>${mans.map((m) => `<tr><td><div style="font-weight:600">${esc(m.title)}${m.sharedFrom ? ' ' + chip('Shared from ' + m.sharedFrom, 'c-info') : ''}</div><div class="tiny muted">${esc([m.manual_no, m.notes].filter(Boolean).join(' · '))}</div></td>
+      <td class="small">${esc(m.doc_type)}</td><td>${m.storage_path ? chip('PDF on file', 'c-ok') : chip(({ on_file: 'Paper/other copy on file', link_found: 'Link found', purchase_needed: 'Purchase needed', request_from_oem: 'Request from maker', need_make_model: 'Need make/model', not_searched: 'Not searched' })[m.status] || m.status, 'c-grey')}</td>
+      <td><div class="row" style="gap:8px">${m.storage_path ? `<button type="button" class="btn sm" data-open="${esc(m.storage_path)}">Open PDF</button>` : /^https?:\/\//.test(m.url || '') ? `<a class="btn sm" href="${esc(m.url)}" target="_blank" rel="noopener">Open link</a>` : ''}
+        ${isSup() && !m.sharedFrom ? `<button type="button" class="btn sm" data-share="${esc(m.id)}">Share with machines…</button>` : ''}
+        ${isSup() ? `<label class="btn sm" style="cursor:pointer">${m.storage_path ? 'Replace PDF' : 'Upload PDF'}<input type="file" accept="application/pdf" data-up="${esc(m.id)}" hidden></label>` : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No manuals listed yet.</p>'}
+  </section>
+
   <div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr);align-items:start">
     <section class="card" aria-labelledby="hh"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 id="hh" style="margin:0">History</h2>
       <button type="button" class="btn sm" id="exp">Export CSV</button></div>
@@ -700,6 +717,55 @@ route('/machine/([^/?]+)', async (id) => {
   </div>`;
   app.innerHTML = officeShell('/machines', body, await exceptionBadge());
 
+  const uploadManual = async (manualId, file) => {
+    if (file.size > 50 * 1024 * 1024) throw new Error('That file is over 50 MB');
+    const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-80);
+    const path = `${id}/${manualId}-${safe}`;
+    const { error } = await sb.storage.from(MANUAL_BUCKET).upload(path, file, { contentType: 'application/pdf', upsert: true });
+    if (error) throw error;
+    await q(sb.from('asset_manuals').update({ storage_path: path, status: 'on_file', source: 'fuse_file', updated_at: new Date().toISOString() }).eq('id', manualId));
+  };
+  $$('[data-open]').forEach((b) => b.addEventListener('click', async () => {
+    const { data, error } = await sb.storage.from(MANUAL_BUCKET).createSignedUrl(b.dataset.open, 3600);
+    if (error) { toast(errMsg(error), true); return; }
+    const w = window.open('about:blank', '_blank');
+    if (w) { w.opener = null; w.location.href = data.signedUrl; } else { location.href = data.signedUrl; }
+  }));
+  $$('[data-share]').forEach((b) => b.addEventListener('click', async () => {
+    const m = mans.find((x) => x.id === b.dataset.share);
+    const cur = new Set((await q(sb.from('asset_manual_links').select('asset_id').eq('manual_id', m.id))).map((r) => r.asset_id));
+    const sameModel = (x) => a.model && x.model === a.model && x.manufacturer === a.manufacturer;
+    const list = core.assets.filter((x) => x.id !== id).sort((x, y) => (sameModel(y) - sameModel(x)) || x.id.localeCompare(y.id));
+    const box = $('#sharebox'); box.hidden = false;
+    box.innerHTML = `<div class="row" style="justify-content:space-between"><b>Machines that also use: ${esc(m.title)}</b><span class="small muted">One PDF is kept; these machines will show it too.</span></div>
+      <div class="row"><button type="button" class="btn sm" id="shsame">Tick all ${esc([a.manufacturer, a.model].filter(Boolean).join(' '))} machines</button><button type="button" class="btn sm" id="shnone">Clear</button></div>
+      <div style="max-height:260px;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px">${list.map((x) => `<label style="flex-direction:row;align-items:center;gap:8px;font-weight:500"><input type="checkbox" data-sh="${esc(x.id)}" ${cur.has(x.id) ? 'checked' : ''} style="width:20px;height:20px"> <span>${esc(x.id.replace(/^FUSE-/, ''))} · ${esc(x.name)}</span></label>`).join('')}</div>
+      <div class="row"><button type="button" class="btn primary" id="shsave">Save</button><button type="button" class="btn" id="shcancel">Cancel</button></div>`;
+    $('#shsame', box).addEventListener('click', () => list.filter(sameModel).forEach((x) => { box.querySelector(`[data-sh="${CSS.escape(x.id)}"]`).checked = true; }));
+    $('#shnone', box).addEventListener('click', () => $$('[data-sh]', box).forEach((c) => { c.checked = false; }));
+    $('#shcancel', box).addEventListener('click', () => { box.hidden = true; });
+    $('#shsave', box).addEventListener('click', (ev) => busy(ev.target, async () => {
+      const ids = $$('[data-sh]', box).filter((c) => c.checked).map((c) => c.dataset.sh);
+      await q(sb.from('asset_manual_links').delete().eq('manual_id', m.id));
+      if (ids.length) await q(sb.from('asset_manual_links').insert(ids.map((aid) => ({ manual_id: m.id, asset_id: aid }))));
+      toast(`Shared with ${ids.length} machine${ids.length === 1 ? '' : 's'}`); render();
+    }));
+  }));
+  $$('[data-up]').forEach((inp) => inp.addEventListener('change', () => {
+    const file = inp.files[0]; if (!file) return;
+    busy({ disabled: false, textContent: '' }, async () => { await uploadManual(inp.dataset.up, file); toast('PDF saved'); render(); });
+  }));
+  if ($('#addman')) {
+    $('#addman').addEventListener('click', () => { $('#manf').hidden = !$('#manf').hidden; });
+    $('#manf').addEventListener('submit', (e) => {
+      e.preventDefault(); const f = formData(e.target); const file = e.target.file.files[0];
+      busy($('button[type="submit"]', e.target), async () => {
+        const rows = await q(sb.from('asset_manuals').insert({ asset_id: id, title: f.title, doc_type: f.doc_type, manual_no: f.manual_no || '', source: 'fuse_file', status: file ? 'on_file' : 'not_searched' }).select());
+        if (file) await uploadManual(rows[0].id, file);
+        toast('Manual added'); render();
+      });
+    });
+  }
   $('#cpy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch (e) { toast('Copy failed – select the link and copy it', true); } });
   $('#prt').addEventListener('click', () => printLabel(a));
   $('#stf').addEventListener('submit', (e) => {
@@ -1159,7 +1225,7 @@ route('/admin/asset/([^/?]+)', async (aid) => {
   </section>
   <section class="card"><fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:700;margin-bottom:10px">Also used by (shared machine)</legend>
     <div class="row">${core.depts.map((d) => `<label style="flex-direction:row;align-items:center;font-weight:500"><input type="checkbox" name="shared" value="${esc(d)}" ${a.shared.includes(d) ? 'checked' : ''} style="width:20px;height:20px"> ${esc(d)}</label>`).join('')}</div></fieldset></section>
-  <section class="card stack"><label>Notes<textarea name="notes" rows="3">${esc(a.notes || '')}</textarea></label>
+  <section class="card stack">${isNew ? '' : `<label>Active / Inactive<select name="active"><option value="1" ${a.status !== 'retired' ? 'selected' : ''}>Active – checks come due</option><option value="0" ${a.status === 'retired' ? 'selected' : ''}>Inactive – keep the record, no checks due</option></select></label>`}<label>Notes<textarea name="notes" rows="3">${esc(a.notes || '')}</textarea></label>
     <label style="flex-direction:row;align-items:center;gap:10px;font-weight:500"><input type="checkbox" name="needs_review" ${a.needs_review ? 'checked' : ''} style="width:20px;height:20px"> Needs review (missing details)</label></section>
   <div class="row"><button class="btn primary" type="submit">Save</button><a class="btn" href="#/admin/machines">Cancel</a></div></form>`, await exceptionBadge());
   $('#af').addEventListener('submit', (e) => {
@@ -1173,6 +1239,10 @@ route('/admin/asset/([^/?]+)', async (aid) => {
     busy($('button[type=submit]', e.target), async () => {
       if (isNew) await q(sb.from('assets').insert({ id, ...row }));
       else await q(sb.from('assets').update(row).eq('id', id));
+      if (!isNew) {
+        const wantInactive = g('active') === '0', isInactive = a.status === 'retired';
+        if (wantInactive !== isInactive) await q(sb.rpc('set_asset_status', { p_asset: id, p_status: wantInactive ? 'retired' : 'running', p_note: wantInactive ? 'Marked inactive in the machine editor' : 'Marked active in the machine editor', p_by: profile.display_name }));
+      }
       await q(sb.from('asset_departments').delete().eq('asset_id', id));
       if (shared.length) await q(sb.from('asset_departments').insert(shared.map((d) => ({ asset_id: id, department: d }))));
       toast('Saved');
