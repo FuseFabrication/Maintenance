@@ -24,7 +24,13 @@ const KIND_CHIP = { missed: 'c-bad', skipped: 'c-warn', failed: 'c-info' };
 const REVIEW = { needs_review: 'Needs review', reviewed: 'Reviewed', auto_closed: 'Auto-closed' };
 const REVIEW_CHIP = { needs_review: 'c-acc', reviewed: 'c-grey', auto_closed: 'c-grey' };
 const ACTIONS = { acknowledged: 'Acknowledged', made_up: 'Made up / done later', corrective_action: 'Corrective action taken' };
-const LOG_KIND = { repair: 'Repair', pm: 'Preventive maintenance', inspection: 'Inspection', calibration: 'Calibration', other: 'Other work' };
+const LOG_KIND = { repair: 'Repair', pm: 'Preventive maintenance', inspection: 'Inspection', calibration: 'Calibration', other: 'Other work', oil_change: 'Oil change', tires: 'Tires', vehicle_other: 'Other vehicle service' };
+// Vehicles (FUSE-VEH-*) and trailers (FUSE-TRL-*) get their own service log types; trailers have no engine, so no oil change.
+const isVeh = (id) => /^FUSE-VEH-/.test(id);
+const isRoadUnit = (id) => /^FUSE-(VEH|TRL)-/.test(id);
+const VEH_KINDS = ['oil_change', 'tires', 'vehicle_other'];
+const logKindsFor = (id) => isRoadUnit(id) ? [...VEH_KINDS.filter((k) => k !== 'oil_change' || isVeh(id)), 'repair', 'other'] : Object.keys(LOG_KIND).filter((k) => !VEH_KINDS.includes(k));
+const LOG_HINT = { oil_change: 'Oil and filter changed', tires: 'e.g. Rotated, replaced 2 front, patched right rear', vehicle_other: 'e.g. Wiper blades, coolant top-off, washer fluid, battery' };
 const PROBLEM_CATS = ['Leak (oil, coolant, air)', 'Electrical / controls', 'Safety device not working', 'Noise or vibration', 'Quality – parts out of spec', 'Other'];
 const ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>';
 
@@ -656,7 +662,7 @@ route('/machine/([^/?]+)', async (id) => {
     ...skips.map((r) => ({ at: r.created_at, html: `${chip(FREQ[r.frequency] + ' check skipped', 'c-warn')} <b>${esc(SKIP_REASONS[r.reason])}</b><div class="small muted">${esc(r.note)}${r.makeup ? ' · make-up: ' + esc(r.makeup) : ''}</div>${corrHtml('skip', r.id)}`, who: r.reported_by, type: 'skip', id: r.id })),
     ...probs.map((r) => ({ at: r.created_at, html: `${chip('Problem', 'c-bad')} <b>${esc(r.category)}</b>${r.loto ? ' · LOTO applied' : ''}<div class="small">${esc(r.description)}</div>${corrHtml('problem', r.id)}`, who: r.reported_by, type: 'problem', id: r.id })),
     ...chg.map((r) => ({ at: r.created_at, html: `${chip('Status', 'c-grey')} ${esc(STATUS[r.old_status] || r.old_status || '—')} → <b>${esc(STATUS[r.new_status] || r.new_status)}</b>${r.note ? `<div class="small muted">${esc(r.note)}</div>` : ''}${corrHtml('status_change', r.id)}`, who: r.changed_by, type: 'status_change', id: r.id })),
-    ...logs.map((r) => ({ at: r.created_at, html: `${chip(LOG_KIND[r.kind], 'c-grey')} <b>${esc(r.title)}</b> <span class="small muted">· done ${fmtDate(r.done_on)}</span>${r.notes ? `<div class="small">${esc(r.notes)}</div>` : ''}${corrHtml('maintenance_log', r.id)}`, who: r.done_by, type: 'maintenance_log', id: r.id })),
+    ...logs.map((r) => ({ at: r.created_at, html: `${chip(LOG_KIND[r.kind], 'c-grey')} <b>${esc(r.title)}</b> <span class="small muted">· done ${fmtDate(r.done_on)}${r.odometer != null ? ` · ${Number(r.odometer).toLocaleString()} mi` : ''}</span>${r.notes ? `<div class="small">${esc(r.notes)}</div>` : ''}${corrHtml('maintenance_log', r.id)}`, who: r.done_by, type: 'maintenance_log', id: r.id })),
   ].sort((x, y) => (x.at < y.at ? 1 : -1));
 
   const link = machineLink(id);
@@ -684,8 +690,14 @@ route('/machine/([^/?]+)', async (id) => {
     }).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No checklists yet.</p>'}
   </section>
 
-  ${id.startsWith('FUSE-VEH-') ? `<section class="card flush" aria-labelledby="mlh"><div class="row" style="justify-content:space-between;padding:18px 22px 6px"><h2 id="mlh" style="margin:0">Mileage log</h2>
+  ${id.startsWith('FUSE-VEH-') ? `<section class="card flush" aria-labelledby="mlh"><div class="row" style="justify-content:space-between;padding:18px 22px 6px"><h2 id="mlh" style="margin:0">Mileage and service</h2>
     ${miles.length ? '<button type="button" class="btn sm" id="milecsv">Download CSV</button>' : ''}</div>
+    ${(() => {
+      const last = (k) => logs.filter((r) => r.kind === k).sort((x, y) => (x.done_on < y.done_on ? 1 : x.done_on > y.done_on ? -1 : x.created_at < y.created_at ? 1 : -1))[0];
+      const latest = miles.length ? miles[miles.length - 1].odo : null;
+      const line = (k, label) => { const r = last(k); return `<div><span class="muted">${label}:</span> <b>${r ? fmtDate(r.done_on) : 'None logged'}</b>${r && r.odometer != null ? ` at ${Number(r.odometer).toLocaleString()} mi${latest != null && latest >= r.odometer ? ` · ${(latest - r.odometer).toLocaleString()} mi since` : ''}` : ''}${r ? ` · ${esc(r.title)}` : ''}</div>`; };
+      return `<div class="small stack" style="gap:4px;padding:0 22px 8px">${line('oil_change', 'Last oil change')}${line('tires', 'Last tire work')}${line('vehicle_other', 'Last other service')}</div>`;
+    })()}
     ${miles.length ? `<p class="small muted" style="padding:0 22px">Latest odometer: <b>${miles[miles.length - 1].odo.toLocaleString()} mi</b> · ${miles.length} reading${miles.length === 1 ? '' : 's'} from the pre-trip check</p>
     <div class="tablewrap" style="max-height:360px;overflow:auto"><table><thead><tr><th>Date</th><th>Driver</th><th>Odometer (mi)</th><th>Miles since last</th></tr></thead><tbody>
     ${miles.slice().reverse().map((m) => `<tr><td>${fmtTime(m.at)}</td><td>${esc(m.by)}</td><td>${m.odo.toLocaleString()}</td><td class="${m.diff != null && m.diff < 0 ? 't-bad' : ''}">${m.diff == null ? '—' : m.diff < 0 ? 'Lower than last reading – check' : m.diff.toLocaleString()}</td></tr>`).join('')}</tbody></table></div>`
@@ -722,8 +734,9 @@ route('/machine/([^/?]+)', async (id) => {
           <button class="btn dark" type="submit">Save status</button></form></section>
       <section class="card stack" aria-labelledby="lgh"><h2 id="lgh" style="margin:0">Log maintenance</h2>
         <form id="lgf" class="stack">
-          <label>Type<select name="kind">${Object.entries(LOG_KIND).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
-          <label>What was done<input name="title" required></label>
+          <label>Type<select name="kind" id="lgkind">${logKindsFor(id).map((k) => `<option value="${k}">${LOG_KIND[k]}</option>`).join('')}</select></label>
+          <label>What was done<input name="title" id="lgtitle" required></label>
+          ${isVeh(id) ? '<label>Odometer (mi)<input name="odometer" id="lgodo" type="number" min="0" step="1" inputmode="numeric"></label>' : ''}
           <label>Details<textarea name="notes" rows="3"></textarea></label>
           <div class="grid g2" style="gap:10px"><label>Done by<input name="done_by" required value="${esc(profile.display_name)}"></label><label>Date<input name="done_on" type="date" value="${shopToday()}" max="${shopToday()}" required></label></div>
           <button class="btn dark" type="submit">Add to history</button></form></section>
@@ -832,10 +845,17 @@ route('/machine/([^/?]+)', async (id) => {
       toast('Status saved'); render();
     });
   });
+  const lgHint = () => {
+    const k = $('#lgkind').value, t = $('#lgtitle');
+    t.placeholder = LOG_HINT[k] && k !== 'oil_change' ? LOG_HINT[k] : '';
+    if (k === 'oil_change' && !t.value) t.value = LOG_HINT.oil_change;
+    if ($('#lgodo')) $('#lgodo').required = k === 'oil_change';
+  };
+  $('#lgkind').addEventListener('change', lgHint); lgHint();
   $('#lgf').addEventListener('submit', (e) => {
     e.preventDefault(); const f = formData(e.target);
     busy($('button', e.target), async () => {
-      await q(sb.from('maintenance_logs').insert({ asset_id: id, kind: f.kind, title: f.title, notes: f.notes, done_by: f.done_by, done_on: f.done_on }));
+      await q(sb.from('maintenance_logs').insert({ asset_id: id, kind: f.kind, title: f.title, notes: f.notes, done_by: f.done_by, done_on: f.done_on, odometer: f.odometer ? Number(f.odometer) : null }));
       toast('Added to history'); render();
     });
   });
@@ -1696,6 +1716,7 @@ route('/m/([^/?]+)', async (id) => {
   ${floorMans.length ? `<section class="stack"><h2><span class="clipwrap" style="margin:0 6px 0 0">${CLIP}</span>Manuals</h2>
     ${floorMans.map((m) => `<div class="qitem"><div class="row" style="justify-content:space-between"><div class="stack" style="gap:2px"><b style="font-size:17px">${esc(m.title)}</b>${m.manual_no ? `<span class="small muted">${esc(m.manual_no)}</span>` : ''}</div>
       <button type="button" class="btn primary" data-fopen="${esc(m.storage_path)}" style="height:52px;padding:0 22px">Open manual</button></div></div>`).join('')}</section>` : ''}
+  ${isRoadUnit(id) ? `<section class="stack"><h2>Log service</h2><div class="grid ${isVeh(id) ? 'g3' : 'g2'}">${logKindsFor(id).filter((k) => VEH_KINDS.includes(k)).map((k) => `<a class="btn big" href="#/m/${encodeURIComponent(id)}/log?kind=${k}">${LOG_KIND[k]}</a>`).join('')}</div></section>` : ''}
   <div class="grid g2"><a class="btn big" href="#/m/${encodeURIComponent(id)}/problem" style="border-color:var(--accent);color:var(--accent)">Report a problem</a><a class="btn big" href="#/m/${encodeURIComponent(id)}/log">Log other work</a></div>
   ${hist.length ? `<section class="card"><h2>Recent</h2>${hist.map((h) => `<div class="list-item small"><span class="muted" style="width:120px;flex-shrink:0">${fmtTime(h.at)}</span><span>${esc(h.t)}</span></div>`).join('')}</section>` : ''}`;
   app.innerHTML = floorShell('#/floor/pick', body);
@@ -1875,22 +1896,32 @@ route('/m/([^/?]+)/log', async (id) => {
   const a = core.assetById[id];
   if (!a) throw new Error('Machine not found');
   const w = getWorker();
+  const kinds = logKindsFor(id);
+  const pk = kinds.includes(query().get('kind')) ? query().get('kind') : kinds[0];
   app.innerHTML = floorShell('#/m/' + encodeURIComponent(id), `
-  <div class="stack" style="gap:6px"><span class="small muted">${esc(a.id)} · ${esc(a.name)}</span><h1>Log other work</h1></div>
+  <div class="stack" style="gap:6px"><span class="small muted">${esc(a.id)} · ${esc(a.name)}</span><h1>${VEH_KINDS.includes(pk) && query().get('kind') ? 'Log ' + LOG_KIND[pk].toLowerCase() : 'Log other work'}</h1></div>
   <form id="lwf" class="stack" style="gap:18px">
-    <label>Type<select name="kind" style="height:56px">${Object.entries(LOG_KIND).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
-    <label>What was done (required)<input name="title" required style="height:56px"></label>
+    <label>Type<select name="kind" id="lwkind" style="height:56px">${kinds.map((k) => `<option value="${k}" ${k === pk ? 'selected' : ''}>${LOG_KIND[k]}</option>`).join('')}</select></label>
+    <label>What was done (required)<input name="title" id="lwtitle" required style="height:56px"></label>
+    ${isVeh(id) ? '<label>Odometer (mi)<input name="odometer" id="lwodo" type="number" min="0" step="1" inputmode="numeric" style="height:56px"></label>' : ''}
     <label>Details<textarea name="notes" rows="3"></textarea></label>
     <label>Date<input type="date" name="done_on" value="${shopToday()}" max="${shopToday()}" required style="height:56px"></label>
     ${a.status !== 'running' ? `<label class="choice"><input type="checkbox" name="back"> ${esc(a.id)} is fixed – mark it Running</label>` : ''}
     <p class="small muted" style="margin:0">Logging as <b>${esc(w.name)}</b></p>
     <button class="btn primary big" type="submit">Save</button>
   </form>`);
+  const lwHint = () => {
+    const k = $('#lwkind').value, t = $('#lwtitle');
+    t.placeholder = LOG_HINT[k] && k !== 'oil_change' ? LOG_HINT[k] : '';
+    if (k === 'oil_change' && !t.value) t.value = LOG_HINT.oil_change;
+    if ($('#lwodo')) $('#lwodo').required = k === 'oil_change';
+  };
+  $('#lwkind').addEventListener('change', lwHint); lwHint();
   $('#lwf').addEventListener('submit', (e) => {
     e.preventDefault(); const f = formData(e.target);
     busy($('button[type=submit]', e.target), async () => {
       const worker = getWorker(); if (!worker) { location.hash = '#/floor'; return; }
-      await q(sb.from('maintenance_logs').insert({ asset_id: id, kind: f.kind, title: f.title, notes: f.notes, done_by: worker.name, done_on: f.done_on }));
+      await q(sb.from('maintenance_logs').insert({ asset_id: id, kind: f.kind, title: f.title, notes: f.notes, done_by: worker.name, done_on: f.done_on, odometer: f.odometer ? Number(f.odometer) : null }));
       if (f.back === 'on') await q(sb.rpc('set_asset_status', { p_asset: id, p_status: 'running', p_note: 'Fixed: ' + f.title, p_by: worker.name }));
       doneScreen(id, 'Work logged' + (f.back === 'on' ? ` and ${a.id} is back to Running.` : '.'));
     });
