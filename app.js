@@ -29,6 +29,8 @@ const PROBLEM_CATS = ['Leak (oil, coolant, air)', 'Electrical / controls', 'Safe
 const ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>';
 
 const chip = (text, cls) => `<span class="chip ${cls}">${esc(text)}</span>`;
+const CLIP = '<svg class="clip" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>';
+const clipIcon = (a) => (a.hasManual ? `<span class="clipwrap" title="Manual uploaded">${CLIP}<span class="sr">Manual uploaded</span></span>` : '');
 const statusChip = (s) => chip(STATUS[s] || s, STATUS_CHIP[s] || 'c-grey');
 
 function shopToday() {
@@ -169,14 +171,20 @@ const tabletDept = () => localStorage.getItem(DKEY) || '';
 // ------------------------------------------------------------------ data
 let core = null; // { depts, assets, assetById, shared, status }
 async function loadCore() {
-  const [depts, assets, shared, status] = await Promise.all([
+  const [depts, assets, shared, status, mans, links] = await Promise.all([
     q(sb.from('departments').select('*').order('sort')),
     q(sb.from('assets').select('*').order('id')),
     q(sb.from('asset_departments').select('*')),
     q(sb.from('v_checklist_status').select('*')),
+    q(sb.from('asset_manuals').select('id,asset_id,storage_path')),
+    q(sb.from('asset_manual_links').select('asset_id,manual_id')),
   ]);
   const assetById = {};
-  assets.forEach((a) => { assetById[a.id] = a; a.shared = []; a.checks = []; });
+  assets.forEach((a) => { assetById[a.id] = a; a.shared = []; a.checks = []; a.hasManual = false; });
+  // Paperclip: a machine has a manual when an uploaded PDF is its own or is shared to it.
+  const uploaded = new Set(mans.filter((m) => m.storage_path).map((m) => m.id));
+  mans.forEach((m) => { if (uploaded.has(m.id) && assetById[m.asset_id]) assetById[m.asset_id].hasManual = true; });
+  links.forEach((l) => { if (uploaded.has(l.manual_id) && assetById[l.asset_id]) assetById[l.asset_id].hasManual = true; });
   shared.forEach((s) => { if (assetById[s.asset_id]) assetById[s.asset_id].shared.push(s.department); });
   status.forEach((s) => { if (assetById[s.asset_id]) assetById[s.asset_id].checks.push(s); });
   assets.forEach((a) => a.checks.sort((x, y) => FREQ_ORDER.indexOf(x.frequency) - FREQ_ORDER.indexOf(y.frequency)));
@@ -590,14 +598,14 @@ route('/machines', async () => {
         const other = a.checks.filter((c) => c.frequency !== 'daily');
         const due = other.filter((c) => c.state === 'due');
         return `<tr><td class="tag"><a href="#/machine/${encodeURIComponent(a.id)}" style="text-decoration:none">${esc(a.id)}</a></td>
-        <td><div style="font-weight:600">${esc(a.name)}</div><div class="tiny muted">${esc([a.manufacturer, a.model].filter(Boolean).join(' · '))}</div>
+        <td><div style="font-weight:600">${esc(a.name)}${clipIcon(a)}</div><div class="tiny muted">${esc([a.manufacturer, a.model].filter(Boolean).join(' · '))}</div>
           ${a.department !== d ? `<div style="margin-top:4px">${chip('Shared', 'c-info')} <span class="tiny muted">owned by ${esc(a.department)}</span></div>` : a.shared.length ? `<div class="tiny muted" style="margin-top:4px">Also used by ${esc(a.shared.join(', '))}</div>` : ''}</td>
         <td>${statusChip(a.status)}</td>
         <td class="${ds.cls}" style="font-weight:600">${inactiveView ? '—' : esc(ds.text)}</td>
         <td>${inactiveView ? '<span class="muted">Inactive – no checks due</span>' : other.length ? (due.length ? `<span class="t-warn" style="font-weight:600">${due.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : '<span class="t-ok">Up to date</span>') : '<span class="muted">None set up</span>'}</td></tr>`;
       }).join('')}</tbody></table></div></section>`;
   }).join('');
-  const body = `<div class="head"><div><h1>Machines</h1><p class="muted" style="margin:4px 0 0">${act.length} machines · ${counts.running} running · ${counts.limited} limited · ${counts.down} down</p></div>
+  const body = `<div class="head"><div><h1>Machines</h1><p class="muted" style="margin:4px 0 0">${act.length} machines · ${counts.running} running · ${counts.limited} limited · ${counts.down} down · <span class="clipwrap" style="margin:0">${CLIP}</span> manual uploaded</p></div>
     ${isSup() ? '<a class="btn primary" href="#/admin/asset/new">+ Add machine</a>' : ''}</div>
   <form id="mf" class="row">
     <label class="sr" for="mq">Search</label><input id="mq" name="q" type="search" placeholder="Search tag, name, model or serial" value="${esc(qs.get('q') || '')}" style="flex:1 1 260px;max-width:380px">
@@ -648,7 +656,7 @@ route('/machine/([^/?]+)', async (id) => {
   const yn = (v) => (v === true ? 'Yes' : v === false ? 'No' : '—');
   const body = `
   <nav aria-label="Breadcrumb" class="small" style="font-weight:600"><a href="#/machines?dept=${encodeURIComponent(a.department || '')}" style="text-decoration:none">${esc(a.department || 'Machines')}</a> / ${esc(a.id)}</nav>
-  <div class="head"><div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}</h1>${statusChip(a.status)}</div>
+  <div class="head"><div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}${clipIcon(a)}</h1>${statusChip(a.status)}</div>
     <span class="muted">${esc([a.department ? a.department + ' department' : '', a.manufacturer, a.model, a.serial ? 'Serial ' + a.serial : ''].filter(Boolean).join(' · '))}</span></div>
     <div class="row">${isSup() ? `<a class="btn" href="#/admin/asset/${encodeURIComponent(id)}">Edit machine</a>` : ''}<a class="btn primary" href="#/m/${encodeURIComponent(id)}">Open on shop floor</a></div></div>
   ${a.needs_review ? `<div class="notice small"><b>Needs review:</b> ${esc(a.notes || 'Some details are missing.')}</div>` : ''}
@@ -1617,12 +1625,12 @@ route('/floor/pick', async () => {
     const otherDue = a.checks.filter((c) => c.frequency !== 'daily' && c.state === 'due');
     return `<a class="mtile ${ds.st === 'due' ? 'due' : ''}" href="#/m/${encodeURIComponent(a.id)}">
       <div class="row" style="justify-content:space-between;gap:8px"><span class="t">${esc(a.id.replace(/^FUSE-/, ''))}</span>${statusChip(a.status)}</div>
-      <span style="font-weight:500">${esc(a.name)}</span>
+      <span style="font-weight:500">${esc(a.name)}${clipIcon(a)}</span>
       ${dept && a.department !== dept ? `<span class="row" style="gap:6px">${chip('Shared', 'c-info')}<span class="tiny muted">owned by ${esc(a.department)}</span></span>` : ''}
       <span style="margin-top:auto;font-weight:700;font-size:14px" class="${ds.cls}">${esc(ds.text)}</span>
       ${otherDue.length ? `<span class="tiny t-warn" style="font-weight:600">${otherDue.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : ''}</a>`;
   }).join('') || '<p class="muted">No machines in this department.</p>'}</div>
-  <p class="small muted" style="margin:0;text-align:center">Shared machines like cranes and forklifts show in every department that uses them. They only need one check, so if someone already did it, it shows as done for everyone.</p>
+  <p class="small muted" style="margin:0;text-align:center"><span class="clipwrap" style="margin:0">${CLIP}</span> = manual uploaded for this machine. Shared machines like cranes and forklifts show in every department that uses them. They only need one check, so if someone already did it, it shows as done for everyone.</p>
   <div class="row" style="padding-top:8px;border-top:1px solid var(--line);justify-content:center"><span class="small muted">Different department?</span>
     ${['', ...core.depts].map((d) => `<a class="pill" aria-pressed="${d === dept}" href="#/floor/pick?dept=${encodeURIComponent(d)}" style="display:inline-flex;align-items:center;height:44px">${esc(d || 'All')}</a>`).join('')}</div>`;
   app.innerHTML = floorShell('', body);
@@ -1653,11 +1661,14 @@ route('/m/([^/?]+)', async (id) => {
   const recent = await Promise.all([
     q(sb.from('inspections').select('performed_at,performed_by,frequency,result').eq('asset_id', id).order('performed_at', { ascending: false }).limit(3)),
     q(sb.from('problems').select('created_at,reported_by,description,new_status').eq('asset_id', id).order('created_at', { ascending: false }).limit(2)),
+    Promise.all([q(sb.from('asset_manuals').select('id,title,manual_no,doc_type,storage_path').eq('asset_id', id)), q(sb.from('asset_manual_links').select('manual:asset_manuals(id,title,manual_no,doc_type,storage_path)').eq('asset_id', id))])
+      .then(([own, lk]) => [...own, ...lk.map((x) => x.manual).filter(Boolean)].filter((m) => m.storage_path).sort((x, y) => (x.doc_type + x.title).localeCompare(y.doc_type + y.title))),
   ]);
+  const floorMans = recent[2];
   const hist = [...recent[0].map((r) => ({ at: r.performed_at, t: `${FREQ[r.frequency]} check${r.result === 'fail' ? ' – item failed' : ''} · ${r.performed_by}` })),
     ...recent[1].map((r) => ({ at: r.created_at, t: `Problem: ${r.description} · ${r.reported_by}` }))].sort((x, y) => (x.at < y.at ? 1 : -1));
   const body = `
-  <div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}</h1>${statusChip(a.status)}</div>
+  <div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}${clipIcon(a)}</h1>${statusChip(a.status)}</div>
     <span class="muted">${esc([a.department, ...(a.shared.length ? ['shared with ' + a.shared.join(', ')] : [])].filter(Boolean).join(' · '))}</span></div>
   ${a.status === 'down' ? '<div class="err"><b>This machine is marked Down.</b> Checks can still be logged, or skipped with "Machine is down".</div>' : ''}
   <section class="stack"><h2>Checklists</h2>
@@ -1668,9 +1679,19 @@ route('/m/([^/?]+)', async (id) => {
         ${c.state === 'done' ? `<a class="btn" href="#/m/${encodeURIComponent(id)}/check/${c.checklist_id}">Do it again</a>` : `<a class="btn primary" href="#/m/${encodeURIComponent(id)}/check/${c.checklist_id}" style="height:52px;padding:0 22px">Start check</a>${c.state === 'due' ? `<a class="btn" href="#/m/${encodeURIComponent(id)}/skip/${c.checklist_id}" style="height:52px">Can't do it? Skip</a>` : ''}`}
       </div></div></div>`).join('') : '<div class="card muted">No checklists have been set up for this machine yet. You can still report a problem or log work.</div>'}
   </section>
+  ${floorMans.length ? `<section class="stack"><h2><span class="clipwrap" style="margin:0 6px 0 0">${CLIP}</span>Manuals</h2>
+    ${floorMans.map((m) => `<div class="qitem"><div class="row" style="justify-content:space-between"><div class="stack" style="gap:2px"><b style="font-size:17px">${esc(m.title)}</b>${m.manual_no ? `<span class="small muted">${esc(m.manual_no)}</span>` : ''}</div>
+      <button type="button" class="btn primary" data-fopen="${esc(m.storage_path)}" style="height:52px;padding:0 22px">Open manual</button></div></div>`).join('')}</section>` : ''}
   <div class="grid g2"><a class="btn big" href="#/m/${encodeURIComponent(id)}/problem" style="border-color:var(--accent);color:var(--accent)">Report a problem</a><a class="btn big" href="#/m/${encodeURIComponent(id)}/log">Log other work</a></div>
   ${hist.length ? `<section class="card"><h2>Recent</h2>${hist.map((h) => `<div class="list-item small"><span class="muted" style="width:120px;flex-shrink:0">${fmtTime(h.at)}</span><span>${esc(h.t)}</span></div>`).join('')}</section>` : ''}`;
   app.innerHTML = floorShell('#/floor/pick', body);
+  $$('[data-fopen]').forEach((b) => b.addEventListener('click', async () => {
+    // Open the window first, while the tap still counts, so tablet popup blockers allow it.
+    const w = window.open('about:blank', '_blank');
+    const { data, error } = await sb.storage.from(MANUAL_BUCKET).createSignedUrl(b.dataset.fopen, 3600);
+    if (error) { if (w) w.close(); toast(errMsg(error), true); return; }
+    if (w) { w.opener = null; w.location.href = data.signedUrl; } else { location.href = data.signedUrl; }
+  }));
 }, { worker: true });
 
 // Run a checklist
