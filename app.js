@@ -1359,6 +1359,13 @@ function roadShape(a, fill, sw) {
       ${[0.3, 0.5, 0.7].map((f) => `<line x1="${x0 + d * f}" y1="${y0}" x2="${x0 + d * f}" y2="${-y0}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/>`).join('')}
       <rect x="${x0 + d * 0.38}" y="${y0 - 0.5}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/><rect x="${x0 + d * 0.38}" y="${-y0}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/>`;
   }
+  if (a.asset_type === 'SUV') {                   // full-size SUV: hood, windshield, one long roof, rear glass
+    const hd = L * 0.2;
+    return `<rect x="${x0}" y="${y0}" width="${L}" height="${W}" rx="${W * 0.2}" fill="${fill}" ${k}/>
+      <rect x="${x0 + 0.5}" y="${y0 + 0.7}" width="${L * 0.05}" height="${W - 1.4}" rx="0.3" fill="#BFE0FF" fill-opacity=".85" ${k}/>
+      <rect x="${x0 + 0.5 + L * 0.07}" y="${y0 + 0.8}" width="${L - hd - L * 0.2}" height="${W - 1.6}" rx="0.6" fill="#000" fill-opacity=".14"/>
+      <rect x="${x0 + L - hd - L * 0.1}" y="${y0 + 0.6}" width="${L * 0.1}" height="${W - 1.2}" rx="0.5" fill="#BFE0FF" fill-opacity=".9" ${k}/>`;
+  }
   const svc = a.asset_type === 'Service Truck';   // single cab with a service body
   if (a.asset_type === 'Flatbed Truck') {         // regular cab with a 14 ft flatbed deck
     const deck = Math.min(14, L * 0.6), cabL = L - deck, xc = x0 + deck;
