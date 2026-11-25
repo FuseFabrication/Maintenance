@@ -1181,7 +1181,7 @@ route('/reports/compliance', async () => {
   cls.forEach((c) => { by[c.id] = { c, a: core.assetById[c.asset_id], done: new Set(), fail: 0, excused: new Set(), skipped: new Set(), missed: new Set() }; });
   ins.forEach((x) => { const r = by[x.checklist_id]; if (!r) return; r.done.add(x.period_start); if (x.result === 'fail') r.fail++; });
   sk.forEach((x) => { const r = by[x.checklist_id]; if (!r || r.done.has(x.period_start)) return; (['machine_down', 'not_in_use'].includes(x.reason) ? r.excused : r.skipped).add(x.period_start); });
-  ms.forEach((x) => { const r = by[x.checklist_id]; if (r) r.missed.add(x.period_start); });
+  ms.forEach((x) => { const r = by[x.checklist_id]; if (r && !r.done.has(x.period_start) && !r.skipped.has(x.period_start) && !r.excused.has(x.period_start)) r.missed.add(x.period_start); });
   let rows = Object.values(by).filter((r) => r.a && r.a.status !== 'retired' && (r.c.active || r.done.size))
     .map((r) => { const counted = r.done.size + r.skipped.size + r.missed.size; return { ...r, nDone: r.done.size, nEx: r.excused.size, nSk: r.skipped.size, nMiss: r.missed.size, p: pct(r.done.size, counted) }; })
     .filter((r) => r.nDone + r.nEx + r.nSk + r.nMiss > 0);
@@ -1193,7 +1193,6 @@ route('/reports/compliance', async () => {
   const tot = sum(rows);
   const group = (keyFn) => { const g = {}; rows.forEach((r) => { const k = keyFn(r); (g[k] = g[k] || []).push(r); }); return Object.entries(g).map(([k, rs]) => ({ k, ...sum(rs) })).sort((x, y) => (x.k < y.k ? -1 : 1)); };
   const byDept = group((r) => r.a.department), byFreq = group((r) => FREQ[r.c.frequency] || r.c.frequency);
-  const old = f.from < new Date(Date.now() - 180 * 86400000).toLocaleDateString('en-CA');
   const sub = `${fmtDate(f.from)} to ${fmtDate(f.to)}${f.dept ? ' · ' + f.dept : ''}${f.freq ? ' · ' + FREQ[f.freq] : ''}${f.group ? ' · ' + (f.group === 'floor' ? 'Floor' : 'Maintenance') : ''}`;
   const sumTable = (title, list) => `<section class="card flush"><h2 style="padding:16px 20px 0;margin:0">${title}</h2><div class="tablewrap"><table><thead><tr><th>${title.replace('By ', '')}</th><th>Done</th><th>Skipped</th><th>Missed</th><th>Excused</th><th>Completion</th></tr></thead><tbody>
     ${list.map((g) => `<tr><td>${esc(g.k)}</td><td>${g.d}</td><td>${g.s}</td><td class="${g.m ? 't-bad' : ''}">${g.m}</td><td class="muted">${g.e}</td><td class="${pctCls(g.p)}" style="font-weight:700">${pctTxt(g.p)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No checks in this range.</td></tr>'}</tbody></table></div></section>`;
@@ -1201,7 +1200,6 @@ route('/reports/compliance', async () => {
   <div class="head"><div><h1>Reports</h1><p class="muted" style="margin:4px 0 0">Compliance summary: how many check periods were done, skipped or missed. Machine-down and not-in-use skips are excused and don't count against completion. The current period only counts once it's done or over.</p></div>${exportBtns}</div>
   ${reportTabs('compliance')}
   ${rangeForm(f, selOpt('dept', [['', 'All departments'], ...core.depts.map((d) => [d, d])], f.dept, 'Department') + selOpt('freq', [['', 'All intervals'], ...FREQ_ORDER.map((x) => [x, FREQ[x]])], f.freq, 'Interval') + selOpt('group', [['', 'Floor and maintenance'], ['floor', 'Floor'], ['maintenance', 'Maintenance']], f.group, 'Done by'))}
-  ${old ? '<p class="notice">Missed checks are only tracked for the last 180 days, so completion before that may read high.</p>' : ''}
   <section class="grid g4">
     <div class="card tile"><span class="small muted">Completion</span><span class="n ${pctCls(tot.p)}">${pctTxt(tot.p)}</span><span class="small muted">${esc(sub)}</span></div>
     <div class="card tile"><span class="small muted">Periods done</span><span class="n">${tot.d}</span></div>
