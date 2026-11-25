@@ -670,17 +670,19 @@ route('/machine/([^/?]+)', async (id) => {
   </section>
 
   <section class="card flush" aria-labelledby="mnh"><div class="row" style="justify-content:space-between;padding:18px 22px 6px"><h2 id="mnh" style="margin:0">Manuals</h2>
-    ${isSup() ? '<button type="button" class="btn sm" id="addman">+ Add manual</button>' : ''}</div>
-    ${isSup() ? `<form id="manf" hidden class="row" style="padding:6px 22px 14px;gap:10px;align-items:flex-end"><label style="flex:1 1 220px">Title<input name="title" required></label>
+    ${isAdmin() ? '<button type="button" class="btn sm" id="addman">+ Add manual</button>' : ''}</div>
+    ${isAdmin() ? `<form id="manf" hidden class="row" style="padding:6px 22px 14px;gap:10px;align-items:flex-end"><label style="flex:1 1 220px">Title<input name="title" required></label>
       <label>Type<select name="doc_type">${['operator', 'maintenance', 'service', 'parts', 'safety', 'electrical', 'programming', 'other'].map((t) => `<option>${t}</option>`).join('')}</select></label>
       <label>Manual no.<input name="manual_no"></label><label>PDF (max 50 MB)<input name="file" type="file" accept="application/pdf"></label>
       <button class="btn primary" type="submit">Save manual</button></form>` : ''}
     <div id="sharebox" hidden class="card stack" style="margin:6px 22px 14px"></div>
+    <div id="editbox" hidden class="card stack" style="margin:6px 22px 14px"></div>
     ${mans.length ? `<div class="tablewrap"><table><thead><tr><th>Manual</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>${mans.map((m) => `<tr><td><div style="font-weight:600">${esc(m.title)}${m.sharedFrom ? ' ' + chip('Shared from ' + m.sharedFrom, 'c-info') : ''}</div><div class="tiny muted">${esc([m.manual_no, m.notes].filter(Boolean).join(' · '))}</div></td>
       <td class="small">${esc(m.doc_type)}</td><td>${m.storage_path ? chip('PDF on file', 'c-ok') : chip(({ on_file: 'Paper/other copy on file', link_found: 'Link found', purchase_needed: 'Purchase needed', request_from_oem: 'Request from maker', need_make_model: 'Need make/model', not_searched: 'Not searched' })[m.status] || m.status, 'c-grey')}</td>
       <td><div class="row" style="gap:8px">${m.storage_path ? `<button type="button" class="btn sm" data-open="${esc(m.storage_path)}">Open PDF</button>` : /^https?:\/\//.test(m.url || '') ? `<a class="btn sm" href="${esc(m.url)}" target="_blank" rel="noopener">Open link</a>` : ''}
-        ${isSup() && !m.sharedFrom ? `<button type="button" class="btn sm" data-share="${esc(m.id)}">Share with machines…</button>` : ''}
-        ${isSup() ? `<label class="btn sm" style="cursor:pointer">${m.storage_path ? 'Replace PDF' : 'Upload PDF'}<input type="file" accept="application/pdf" data-up="${esc(m.id)}" hidden></label>` : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No manuals listed yet.</p>'}
+        ${isAdmin() && !m.sharedFrom ? `<button type="button" class="btn sm" data-share="${esc(m.id)}">Share with machines…</button>` : ''}
+        ${isAdmin() ? `<label class="btn sm" style="cursor:pointer">${m.storage_path ? 'Replace PDF' : 'Upload PDF'}<input type="file" accept="application/pdf" data-up="${esc(m.id)}" hidden></label>` : ''}
+        ${isAdmin() && !m.sharedFrom ? `<button type="button" class="btn sm" data-edit="${esc(m.id)}">Edit</button><button type="button" class="btn sm danger" data-delman="${esc(m.id)}">Delete</button>` : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No manuals listed yet.</p>'}
   </section>
 
   <div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr);align-items:start">
@@ -750,6 +752,39 @@ route('/machine/([^/?]+)', async (id) => {
       if (ids.length) await q(sb.from('asset_manual_links').insert(ids.map((aid) => ({ manual_id: m.id, asset_id: aid }))));
       toast(`Shared with ${ids.length} machine${ids.length === 1 ? '' : 's'}`); render();
     }));
+  }));
+  const DOC_TYPES = ['operator', 'maintenance', 'service', 'parts', 'safety', 'electrical', 'programming', 'other'];
+  const MAN_STATUS = { on_file: 'Paper/other copy on file', link_found: 'Link found', purchase_needed: 'Purchase needed', request_from_oem: 'Request from maker', need_make_model: 'Need make/model', not_searched: 'Not searched' };
+  $$('[data-edit]').forEach((b) => b.addEventListener('click', () => {
+    const m = mans.find((x) => x.id === b.dataset.edit);
+    const box = $('#editbox'); box.hidden = false;
+    const types = DOC_TYPES.includes(m.doc_type) ? DOC_TYPES : DOC_TYPES.concat(m.doc_type ? [m.doc_type] : []);
+    box.innerHTML = `<form id="edf" class="stack"><b>Edit manual</b>
+      <div class="row" style="gap:10px;align-items:flex-end"><label style="flex:1 1 260px">Title<input name="title" required value="${esc(m.title)}"></label>
+        <label>Type<select name="doc_type">${types.map((t) => `<option ${t === m.doc_type ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
+        <label>Manual no.<input name="manual_no" value="${esc(m.manual_no || '')}"></label></div>
+      <div class="row" style="gap:10px;align-items:flex-end"><label style="flex:1 1 260px">Link (optional)<input name="url" value="${esc(m.url || '')}" placeholder="https://"></label>
+        ${m.storage_path ? '' : `<label>Status<select name="status">${Object.entries(MAN_STATUS).map(([k, v]) => `<option value="${k}" ${k === m.status ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`}</div>
+      <label>Notes<textarea name="notes" rows="2">${esc(m.notes || '')}</textarea></label>
+      <div class="row"><button class="btn primary" type="submit">Save changes</button><button type="button" class="btn" id="edcancel">Cancel</button></div></form>`;
+    box.scrollIntoView({ block: 'nearest' });
+    $('#edcancel', box).addEventListener('click', () => { box.hidden = true; });
+    $('#edf', box).addEventListener('submit', (e) => {
+      e.preventDefault(); const f = formData(e.target);
+      const upd = { title: f.title.trim(), doc_type: f.doc_type, manual_no: (f.manual_no || '').trim(), url: (f.url || '').trim(), notes: f.notes || '', updated_at: new Date().toISOString() };
+      if (f.status) upd.status = f.status;
+      busy($('button[type="submit"]', e.target), async () => { await q(sb.from('asset_manuals').update(upd).eq('id', m.id)); toast('Manual updated'); render(); });
+    });
+  }));
+  $$('[data-delman]').forEach((b) => b.addEventListener('click', () => {
+    const m = mans.find((x) => x.id === b.dataset.delman);
+    if (!confirm(`Delete "${m.title}"?${m.storage_path ? ' The uploaded PDF will be deleted too.' : ''}\n\nIf this manual is shared with other machines, it is removed from them as well. This cannot be undone.`)) return;
+    busy(b, async () => {
+      if (m.storage_path) { const { error } = await sb.storage.from(MANUAL_BUCKET).remove([m.storage_path]); if (error) throw error; }
+      await q(sb.from('asset_manual_links').delete().eq('manual_id', m.id));
+      await q(sb.from('asset_manuals').delete().eq('id', m.id));
+      toast('Manual deleted'); render();
+    });
   }));
   $$('[data-up]').forEach((inp) => inp.addEventListener('change', () => {
     const file = inp.files[0]; if (!file) return;
@@ -1257,7 +1292,7 @@ let layoutSvgText = null;
 const PIN = {
   down: { fill: '#991B1B', label: 'Down' },
   limited: { fill: '#EAB308', label: 'Limited' },
-  due: { fill: '#C2410C', label: 'Daily check due' },
+  due: { fill: '#2563EB', label: 'Daily check due' },
   done: { fill: '#166534', label: 'Checked today' },
   none: { fill: '#94A3B8', label: 'No daily check due' },
 };
