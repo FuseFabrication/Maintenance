@@ -1661,7 +1661,10 @@ route('/m/([^/?]+)', async (id) => {
   const recent = await Promise.all([
     q(sb.from('inspections').select('performed_at,performed_by,frequency,result').eq('asset_id', id).order('performed_at', { ascending: false }).limit(3)),
     q(sb.from('problems').select('created_at,reported_by,description,new_status').eq('asset_id', id).order('created_at', { ascending: false }).limit(2)),
+    Promise.all([q(sb.from('asset_manuals').select('id,title,manual_no,doc_type,storage_path').eq('asset_id', id)), q(sb.from('asset_manual_links').select('manual:asset_manuals(id,title,manual_no,doc_type,storage_path)').eq('asset_id', id))])
+      .then(([own, lk]) => [...own, ...lk.map((x) => x.manual).filter(Boolean)].filter((m) => m.storage_path).sort((x, y) => (x.doc_type + x.title).localeCompare(y.doc_type + y.title))),
   ]);
+  const floorMans = recent[2];
   const hist = [...recent[0].map((r) => ({ at: r.performed_at, t: `${FREQ[r.frequency]} check${r.result === 'fail' ? ' – item failed' : ''} · ${r.performed_by}` })),
     ...recent[1].map((r) => ({ at: r.created_at, t: `Problem: ${r.description} · ${r.reported_by}` }))].sort((x, y) => (x.at < y.at ? 1 : -1));
   const body = `
@@ -1676,9 +1679,19 @@ route('/m/([^/?]+)', async (id) => {
         ${c.state === 'done' ? `<a class="btn" href="#/m/${encodeURIComponent(id)}/check/${c.checklist_id}">Do it again</a>` : `<a class="btn primary" href="#/m/${encodeURIComponent(id)}/check/${c.checklist_id}" style="height:52px;padding:0 22px">Start check</a>${c.state === 'due' ? `<a class="btn" href="#/m/${encodeURIComponent(id)}/skip/${c.checklist_id}" style="height:52px">Can't do it? Skip</a>` : ''}`}
       </div></div></div>`).join('') : '<div class="card muted">No checklists have been set up for this machine yet. You can still report a problem or log work.</div>'}
   </section>
+  ${floorMans.length ? `<section class="stack"><h2><span class="clipwrap" style="margin:0 6px 0 0">${CLIP}</span>Manuals</h2>
+    ${floorMans.map((m) => `<div class="qitem"><div class="row" style="justify-content:space-between"><div class="stack" style="gap:2px"><b style="font-size:17px">${esc(m.title)}</b>${m.manual_no ? `<span class="small muted">${esc(m.manual_no)}</span>` : ''}</div>
+      <button type="button" class="btn primary" data-fopen="${esc(m.storage_path)}" style="height:52px;padding:0 22px">Open manual</button></div></div>`).join('')}</section>` : ''}
   <div class="grid g2"><a class="btn big" href="#/m/${encodeURIComponent(id)}/problem" style="border-color:var(--accent);color:var(--accent)">Report a problem</a><a class="btn big" href="#/m/${encodeURIComponent(id)}/log">Log other work</a></div>
   ${hist.length ? `<section class="card"><h2>Recent</h2>${hist.map((h) => `<div class="list-item small"><span class="muted" style="width:120px;flex-shrink:0">${fmtTime(h.at)}</span><span>${esc(h.t)}</span></div>`).join('')}</section>` : ''}`;
   app.innerHTML = floorShell('#/floor/pick', body);
+  $$('[data-fopen]').forEach((b) => b.addEventListener('click', async () => {
+    // Open the window first, while the tap still counts, so tablet popup blockers allow it.
+    const w = window.open('about:blank', '_blank');
+    const { data, error } = await sb.storage.from(MANUAL_BUCKET).createSignedUrl(b.dataset.fopen, 3600);
+    if (error) { if (w) w.close(); toast(errMsg(error), true); return; }
+    if (w) { w.opener = null; w.location.href = data.signedUrl; } else { location.href = data.signedUrl; }
+  }));
 }, { worker: true });
 
 // Run a checklist
