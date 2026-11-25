@@ -29,6 +29,8 @@ const PROBLEM_CATS = ['Leak (oil, coolant, air)', 'Electrical / controls', 'Safe
 const ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>';
 
 const chip = (text, cls) => `<span class="chip ${cls}">${esc(text)}</span>`;
+const CLIP = '<svg class="clip" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>';
+const clipIcon = (a) => (a.hasManual ? `<span class="clipwrap" title="Manual uploaded">${CLIP}<span class="sr">Manual uploaded</span></span>` : '');
 const statusChip = (s) => chip(STATUS[s] || s, STATUS_CHIP[s] || 'c-grey');
 
 function shopToday() {
@@ -169,14 +171,20 @@ const tabletDept = () => localStorage.getItem(DKEY) || '';
 // ------------------------------------------------------------------ data
 let core = null; // { depts, assets, assetById, shared, status }
 async function loadCore() {
-  const [depts, assets, shared, status] = await Promise.all([
+  const [depts, assets, shared, status, mans, links] = await Promise.all([
     q(sb.from('departments').select('*').order('sort')),
     q(sb.from('assets').select('*').order('id')),
     q(sb.from('asset_departments').select('*')),
     q(sb.from('v_checklist_status').select('*')),
+    q(sb.from('asset_manuals').select('id,asset_id,storage_path')),
+    q(sb.from('asset_manual_links').select('asset_id,manual_id')),
   ]);
   const assetById = {};
-  assets.forEach((a) => { assetById[a.id] = a; a.shared = []; a.checks = []; });
+  assets.forEach((a) => { assetById[a.id] = a; a.shared = []; a.checks = []; a.hasManual = false; });
+  // Paperclip: a machine has a manual when an uploaded PDF is its own or is shared to it.
+  const uploaded = new Set(mans.filter((m) => m.storage_path).map((m) => m.id));
+  mans.forEach((m) => { if (uploaded.has(m.id) && assetById[m.asset_id]) assetById[m.asset_id].hasManual = true; });
+  links.forEach((l) => { if (uploaded.has(l.manual_id) && assetById[l.asset_id]) assetById[l.asset_id].hasManual = true; });
   shared.forEach((s) => { if (assetById[s.asset_id]) assetById[s.asset_id].shared.push(s.department); });
   status.forEach((s) => { if (assetById[s.asset_id]) assetById[s.asset_id].checks.push(s); });
   assets.forEach((a) => a.checks.sort((x, y) => FREQ_ORDER.indexOf(x.frequency) - FREQ_ORDER.indexOf(y.frequency)));
@@ -590,14 +598,14 @@ route('/machines', async () => {
         const other = a.checks.filter((c) => c.frequency !== 'daily');
         const due = other.filter((c) => c.state === 'due');
         return `<tr><td class="tag"><a href="#/machine/${encodeURIComponent(a.id)}" style="text-decoration:none">${esc(a.id)}</a></td>
-        <td><div style="font-weight:600">${esc(a.name)}</div><div class="tiny muted">${esc([a.manufacturer, a.model].filter(Boolean).join(' · '))}</div>
+        <td><div style="font-weight:600">${esc(a.name)}${clipIcon(a)}</div><div class="tiny muted">${esc([a.manufacturer, a.model].filter(Boolean).join(' · '))}</div>
           ${a.department !== d ? `<div style="margin-top:4px">${chip('Shared', 'c-info')} <span class="tiny muted">owned by ${esc(a.department)}</span></div>` : a.shared.length ? `<div class="tiny muted" style="margin-top:4px">Also used by ${esc(a.shared.join(', '))}</div>` : ''}</td>
         <td>${statusChip(a.status)}</td>
         <td class="${ds.cls}" style="font-weight:600">${inactiveView ? '—' : esc(ds.text)}</td>
         <td>${inactiveView ? '<span class="muted">Inactive – no checks due</span>' : other.length ? (due.length ? `<span class="t-warn" style="font-weight:600">${due.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : '<span class="t-ok">Up to date</span>') : '<span class="muted">None set up</span>'}</td></tr>`;
       }).join('')}</tbody></table></div></section>`;
   }).join('');
-  const body = `<div class="head"><div><h1>Machines</h1><p class="muted" style="margin:4px 0 0">${act.length} machines · ${counts.running} running · ${counts.limited} limited · ${counts.down} down</p></div>
+  const body = `<div class="head"><div><h1>Machines</h1><p class="muted" style="margin:4px 0 0">${act.length} machines · ${counts.running} running · ${counts.limited} limited · ${counts.down} down · <span class="clipwrap" style="margin:0">${CLIP}</span> manual uploaded</p></div>
     ${isSup() ? '<a class="btn primary" href="#/admin/asset/new">+ Add machine</a>' : ''}</div>
   <form id="mf" class="row">
     <label class="sr" for="mq">Search</label><input id="mq" name="q" type="search" placeholder="Search tag, name, model or serial" value="${esc(qs.get('q') || '')}" style="flex:1 1 260px;max-width:380px">
