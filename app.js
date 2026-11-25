@@ -15,7 +15,7 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const FREQ = { daily: 'Daily', semiweekly: 'Twice weekly', weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly', quarterly: 'Quarterly', semiannual: 'Semi-annual', annual: 'Annual', triennial: 'Every 3 years' };
 const FREQ_ORDER = ['daily', 'semiweekly', 'weekly', 'biweekly', 'monthly', 'quarterly', 'semiannual', 'annual', 'triennial'];
-const STATUS = { running: 'Running', limited: 'Limited', down: 'Down', retired: 'Retired' };
+const STATUS = { running: 'Running', limited: 'Limited', down: 'Down', retired: 'Inactive' };
 const STATUS_CHIP = { running: 'c-ok', limited: 'c-warn', down: 'c-bad', retired: 'c-grey' };
 const SKIP_REASONS = { machine_down: 'Machine is down', not_in_use: "Machine isn't being used", no_time: 'No time / short staffed', missing_parts: 'Missing parts or tools', other: 'Other' };
 const KIND = { missed: 'Missed', skipped: 'Skipped', failed: 'Failed item' };
@@ -577,8 +577,9 @@ route('/machines', async () => {
   act.forEach((a) => { counts[a.status] = (counts[a.status] || 0) + 1; });
   const match = (a) => (!st || a.status === st || (st === 'nochecklist' && !a.checks.length))
     && (!text || [a.id, a.name, a.model, a.serial, a.manufacturer, a.cpa_id].join(' ').toLowerCase().includes(text));
+  const inactiveView = st === 'retired';
   const groups = (dept ? [dept] : core.depts).map((d) => {
-    const rows = (dept ? deptAssets(d) : act.filter((a) => a.department === d)).filter(match);
+    const rows = (inactiveView ? core.assets.filter((a) => a.status === 'retired' && a.department === d) : dept ? deptAssets(d) : act.filter((a) => a.department === d)).filter(match);
     if (!rows.length) return '';
     return `<section class="card flush"><div class="row" style="padding:14px 20px;background:#F9F9F7;justify-content:space-between">
       <h2 style="font-size:18px">${esc(d)}</h2><span class="small muted">${rows.length} machines</span></div>
@@ -591,8 +592,8 @@ route('/machines', async () => {
         <td><div style="font-weight:600">${esc(a.name)}</div><div class="tiny muted">${esc([a.manufacturer, a.model].filter(Boolean).join(' · '))}</div>
           ${a.department !== d ? `<div style="margin-top:4px">${chip('Shared', 'c-info')} <span class="tiny muted">owned by ${esc(a.department)}</span></div>` : a.shared.length ? `<div class="tiny muted" style="margin-top:4px">Also used by ${esc(a.shared.join(', '))}</div>` : ''}</td>
         <td>${statusChip(a.status)}</td>
-        <td class="${ds.cls}" style="font-weight:600">${esc(ds.text)}</td>
-        <td>${other.length ? (due.length ? `<span class="t-warn" style="font-weight:600">${due.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : '<span class="t-ok">Up to date</span>') : '<span class="muted">None set up</span>'}</td></tr>`;
+        <td class="${ds.cls}" style="font-weight:600">${inactiveView ? '—' : esc(ds.text)}</td>
+        <td>${inactiveView ? '<span class="muted">Inactive – no checks due</span>' : other.length ? (due.length ? `<span class="t-warn" style="font-weight:600">${due.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : '<span class="t-ok">Up to date</span>') : '<span class="muted">None set up</span>'}</td></tr>`;
       }).join('')}</tbody></table></div></section>`;
   }).join('');
   const body = `<div class="head"><div><h1>Machines</h1><p class="muted" style="margin:4px 0 0">${act.length} machines · ${counts.running} running · ${counts.limited} limited · ${counts.down} down</p></div>
@@ -600,7 +601,7 @@ route('/machines', async () => {
   <form id="mf" class="row">
     <label class="sr" for="mq">Search</label><input id="mq" name="q" type="search" placeholder="Search tag, name, model or serial" value="${esc(qs.get('q') || '')}" style="flex:1 1 260px;max-width:380px">
     <label class="sr" for="md">Department</label><select id="md" name="dept"><option value="">All departments</option>${core.depts.map((d) => `<option ${d === dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
-    <label class="sr" for="ms">Status</label><select id="ms" name="status"><option value="">Any status</option>${['running', 'limited', 'down'].map((s) => `<option value="${s}" ${s === st ? 'selected' : ''}>${STATUS[s]}</option>`).join('')}<option value="nochecklist" ${st === 'nochecklist' ? 'selected' : ''}>No checklist yet</option></select>
+    <label class="sr" for="ms">Status</label><select id="ms" name="status"><option value="">Any status</option>${['running', 'limited', 'down', 'retired'].map((s) => `<option value="${s}" ${s === st ? 'selected' : ''}>${STATUS[s]}</option>`).join('')}<option value="nochecklist" ${st === 'nochecklist' ? 'selected' : ''}>No checklist yet</option></select>
     <button class="btn" type="submit">Filter</button></form>
   ${groups || '<p class="muted">No machines match.</p>'}`;
   app.innerHTML = officeShell('/machines', body, await exceptionBadge());
@@ -1159,7 +1160,7 @@ route('/admin/asset/([^/?]+)', async (aid) => {
   </section>
   <section class="card"><fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:700;margin-bottom:10px">Also used by (shared machine)</legend>
     <div class="row">${core.depts.map((d) => `<label style="flex-direction:row;align-items:center;font-weight:500"><input type="checkbox" name="shared" value="${esc(d)}" ${a.shared.includes(d) ? 'checked' : ''} style="width:20px;height:20px"> ${esc(d)}</label>`).join('')}</div></fieldset></section>
-  <section class="card stack"><label>Notes<textarea name="notes" rows="3">${esc(a.notes || '')}</textarea></label>
+  <section class="card stack">${isNew ? '' : `<label>Active / Inactive<select name="active"><option value="1" ${a.status !== 'retired' ? 'selected' : ''}>Active – checks come due</option><option value="0" ${a.status === 'retired' ? 'selected' : ''}>Inactive – keep the record, no checks due</option></select></label>`}<label>Notes<textarea name="notes" rows="3">${esc(a.notes || '')}</textarea></label>
     <label style="flex-direction:row;align-items:center;gap:10px;font-weight:500"><input type="checkbox" name="needs_review" ${a.needs_review ? 'checked' : ''} style="width:20px;height:20px"> Needs review (missing details)</label></section>
   <div class="row"><button class="btn primary" type="submit">Save</button><a class="btn" href="#/admin/machines">Cancel</a></div></form>`, await exceptionBadge());
   $('#af').addEventListener('submit', (e) => {
@@ -1173,6 +1174,10 @@ route('/admin/asset/([^/?]+)', async (aid) => {
     busy($('button[type=submit]', e.target), async () => {
       if (isNew) await q(sb.from('assets').insert({ id, ...row }));
       else await q(sb.from('assets').update(row).eq('id', id));
+      if (!isNew) {
+        const wantInactive = g('active') === '0', isInactive = a.status === 'retired';
+        if (wantInactive !== isInactive) await q(sb.rpc('set_asset_status', { p_asset: id, p_status: wantInactive ? 'retired' : 'running', p_note: wantInactive ? 'Marked inactive in the machine editor' : 'Marked active in the machine editor', p_by: profile.display_name }));
+      }
       await q(sb.from('asset_departments').delete().eq('asset_id', id));
       if (shared.length) await q(sb.from('asset_departments').insert(shared.map((d) => ({ asset_id: id, department: d }))));
       toast('Saved');
