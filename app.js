@@ -1334,16 +1334,76 @@ let layoutSvgText = null;
 const PIN = {
   down: { fill: '#991B1B', label: 'Down' },
   limited: { fill: '#EAB308', label: 'Limited' },
-  due: { fill: '#2563EB', label: 'Daily check due' },
-  done: { fill: '#166534', label: 'Checked today' },
-  none: { fill: '#94A3B8', label: 'No daily check due' },
+  overdue: { fill: '#EA580C', label: 'Overdue (a period was missed)' },
+  due: { fill: '#2563EB', label: 'Due' },
+  done: { fill: '#166534', label: 'Done this period' },
+  none: { fill: '#94A3B8', label: 'Nothing due' },
 };
-function pinState(a) {
+// Vehicles and trailers draw as small top-down shapes at real size (feet), pointing along +x, rotated by assets.map_rot.
+// Sizes are typical overall length x width for each unit (trailers include the tongue).
+const ROAD_SIZE = {
+  'FUSE-VEH-1000': [19.5, 6.7], 'FUSE-VEH-1030': [20.5, 7.8], 'FUSE-VEH-1040': [20.5, 7.8], 'FUSE-VEH-1050': [24, 8],
+  'FUSE-VEH-1060': [19.5, 6.9], 'FUSE-VEH-1070': [21, 6.8], 'FUSE-VEH-1080': [17.9, 7],
+  'FUSE-TRL-T100': [27, 8.5], 'FUSE-TRL-T200': [22, 7], 'FUSE-TRL-T300': [20, 7.5], 'FUSE-TRL-T400': [12, 6],
+  'FUSE-TRL-T500': [24, 8.5], 'FUSE-TRL-T600': [29, 8.5],
+};
+const roadSize = (a) => ROAD_SIZE[a.id] || (/^FUSE-TRL-/.test(a.id) ? [20, 8] : /^FUSE-VEH-/.test(a.id) ? [20, 7] : null);
+// Original, generic top-down shapes (front of the vehicle / trailer tongue at +x).
+function roadShape(a, fill, sw) {
+  const [L, W] = roadSize(a), x0 = -L / 2, y0 = -W / 2, k = 'stroke="#1C1F23" stroke-opacity=".55" stroke-width="' + sw + '"';
+  if (/^FUSE-TRL-/.test(a.id)) {
+    const t = Math.min(4, L * 0.18), d = L - t;   // tongue length, deck length
+    return `<path d="M${x0 + d} ${-W * 0.3} L${L / 2 - 0.4} ${-0.25} L${L / 2} 0 L${L / 2 - 0.4} ${0.25} L${x0 + d} ${W * 0.3}" fill="none" stroke="#1C1F23" stroke-width="${sw * 2.2}" stroke-linejoin="round"/>
+      <circle cx="${L / 2 - 0.3}" cy="0" r="0.45" fill="#1C1F23"/>
+      <rect x="${x0}" y="${y0}" width="${d}" height="${W}" rx="0.6" fill="${fill}" ${k}/>
+      ${[0.3, 0.5, 0.7].map((f) => `<line x1="${x0 + d * f}" y1="${y0}" x2="${x0 + d * f}" y2="${-y0}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/>`).join('')}
+      <rect x="${x0 + d * 0.38}" y="${y0 - 0.5}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/><rect x="${x0 + d * 0.38}" y="${-y0}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/>`;
+  }
+  if (a.asset_type === 'SUV') {                   // full-size SUV: hood, windshield, one long roof, rear glass
+    const hd = L * 0.2;
+    return `<rect x="${x0}" y="${y0}" width="${L}" height="${W}" rx="${W * 0.2}" fill="${fill}" ${k}/>
+      <rect x="${x0 + 0.5}" y="${y0 + 0.7}" width="${L * 0.05}" height="${W - 1.4}" rx="0.3" fill="#BFE0FF" fill-opacity=".85" ${k}/>
+      <rect x="${x0 + 0.5 + L * 0.07}" y="${y0 + 0.8}" width="${L - hd - L * 0.2}" height="${W - 1.6}" rx="0.6" fill="#000" fill-opacity=".14"/>
+      <rect x="${x0 + L - hd - L * 0.1}" y="${y0 + 0.6}" width="${L * 0.1}" height="${W - 1.2}" rx="0.5" fill="#BFE0FF" fill-opacity=".9" ${k}/>`;
+  }
+  const svc = a.asset_type === 'Service Truck';   // single cab with a service body
+  if (a.asset_type === 'Flatbed Truck') {         // regular cab with a 14 ft flatbed deck
+    const deck = Math.min(14, L * 0.6), cabL = L - deck, xc = x0 + deck;
+    return `<rect x="${x0}" y="${y0}" width="${deck}" height="${W}" rx="0.3" fill="${fill}" ${k}/>
+      ${[0.25, 0.5, 0.75].map((f) => `<line x1="${x0 + deck * f}" y1="${y0}" x2="${x0 + deck * f}" y2="${-y0}" stroke="#fff" stroke-opacity=".45" stroke-width="${sw}"/>`).join('')}
+      <rect x="${xc - 0.6}" y="${y0}" width="0.6" height="${W}" fill="#1C1F23" fill-opacity=".6"/>
+      <rect x="${xc + 0.2}" y="${y0 + 0.4}" width="${cabL - 0.2}" height="${W - 0.8}" rx="${W * 0.16}" fill="${fill}" ${k}/>
+      <rect x="${xc + cabL * 0.25}" y="${y0 + 0.9}" width="${cabL * 0.3}" height="${W - 1.8}" rx="0.4" fill="#000" fill-opacity=".15"/>
+      <rect x="${xc + cabL * 0.55}" y="${y0 + 0.9}" width="${cabL * 0.17}" height="${W - 1.8}" rx="0.5" fill="#BFE0FF" fill-opacity=".9" ${k}/>`;
+  }
+  const hood = L * 0.17, cab = L * (svc ? 0.17 : a.asset_type === 'SUV' ? 0.5 : 0.3);   // hood and cab/cabin lengths; the rest is the bed / body
+  const bx = x0, bl = L - hood - cab;            // bed at the back
+  return `<rect x="${x0}" y="${y0}" width="${L}" height="${W}" rx="${W * 0.18}" fill="${fill}" ${k}/>
+    ${a.asset_type === 'SUV' ? `<rect x="${bx + 0.8}" y="${y0 + 0.9}" width="${bl + cab * 0.5}" height="${W - 1.8}" rx="0.8" fill="#000" fill-opacity=".12"/>`
+      : svc ? `<rect x="${bx + 0.3}" y="${y0 + 0.3}" width="${bl - 0.5}" height="${W * 0.28}" fill="#000" fill-opacity=".22"/><rect x="${bx + 0.3}" y="${-y0 - 0.3 - W * 0.28}" width="${bl - 0.5}" height="${W * 0.28}" fill="#000" fill-opacity=".22"/>
+        ${[0.33, 0.66].map((f) => `<line x1="${bx + bl * f}" y1="${y0 + 0.3}" x2="${bx + bl * f}" y2="${y0 + 0.3 + W * 0.28}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/><line x1="${bx + bl * f}" y1="${-y0 - 0.3}" x2="${bx + bl * f}" y2="${-y0 - 0.3 - W * 0.28}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/>`).join('')}
+        <rect x="${bx + 0.6}" y="${y0 + 0.5 + W * 0.28}" width="${bl - 1.1}" height="${W - 1 - W * 0.56}" fill="#000" fill-opacity=".1"/>`
+      : `<rect x="${bx + 0.6}" y="${y0 + 0.6}" width="${bl - 0.9}" height="${W - 1.2}" rx="0.4" fill="#000" fill-opacity=".18"/>`}
+    <rect x="${x0 + bl + cab * 0.62}" y="${y0 + 0.5}" width="${cab * 0.32}" height="${W - 1}" rx="0.5" fill="#BFE0FF" fill-opacity=".9" ${k}/>
+    ${svc ? '' : `<rect x="${x0 + bl + 0.3}" y="${y0 + 0.5}" width="${cab * 0.18}" height="${W - 1}" rx="0.4" fill="#BFE0FF" fill-opacity=".7"/>`}`;
+}
+// Map "Checks" picker: '' = anything due, otherwise a frequency key.
+// A check is overdue when it is due now and a whole period has been missed since it was last done.
+let missedSince = {};   // checklist_id -> latest missed period_start (YYYY-MM-DD)
+function checkPin(c) {
+  if (c.state === 'done') return 'done';
+  if (c.state !== 'due') return 'none';
+  const m = missedSince[c.checklist_id];
+  return m && (!c.last_done_at || m > String(c.last_done_at).slice(0, 10)) ? 'overdue' : 'due';
+}
+function pinState(a, freq) {
   if (a.status === 'down') return 'down';
   if (a.status === 'limited') return 'limited';
-  const st = dailyState(a).st;
-  if (st === 'due') return 'due';
-  if (st === 'done') return 'done';
+  const cs = freq ? a.checks.filter((c) => c.frequency === freq) : a.checks;
+  const st = cs.map(checkPin);
+  if (st.includes('overdue')) return 'overdue';
+  if (st.includes('due')) return 'due';
+  if (freq ? st.includes('done') : (cs.length && st.includes('done'))) return 'done';
   return 'none';
 }
 
@@ -1358,6 +1418,11 @@ route('/map', async () => {
   const hasCols = core.assets.length && 'map_x' in core.assets[0];
   const qs = query();
   let dept = qs.has('dept') ? qs.get('dept') : tabletDept();
+  let freq = qs.has('f') ? qs.get('f') : (profile.role === 'tablet' ? 'daily' : '');
+  try {
+    const ms = await q(sb.from('v_exceptions').select('checklist_id,period_start').eq('kind', 'missed'));
+    missedSince = {}; ms.forEach((m) => { if (!missedSince[m.checklist_id] || m.period_start > missedSince[m.checklist_id]) missedSince[m.checklist_id] = m.period_start; });
+  } catch (e) { missedSince = {}; }
   let editing = qs.get('edit') === '1' && isSup();
   let selected = qs.get('focus') || null;   // machine id shown in the card
   let placing = null;                        // machine id being placed (edit mode)
@@ -1367,6 +1432,7 @@ route('/map', async () => {
   <div class="row" style="justify-content:space-between;align-items:flex-end">
     <div><h1>Shop floor</h1><p class="muted" style="margin:6px 0 0">Tap a machine to log maintenance. Pinch or scroll to zoom, drag to move.</p></div>
     <div class="row">
+      <label class="small">Checks<select id="mfreq"><option value="">Anything due</option>${FREQ_ORDER.filter((f) => core.status.some((c) => c.frequency === f)).map((f) => `<option value="${f}" ${f === freq ? 'selected' : ''}>${FREQ[f]}</option>`).join('')}</select></label>
       <label class="small">Department<select id="mdept"><option value="">All</option>${core.depts.map((d) => `<option ${d === dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
       <form id="mfind" class="row" style="gap:6px;align-items:flex-end"><label class="small">Find<input name="t" placeholder="Tag, e.g. PB-001" style="width:150px;text-transform:uppercase"></label><button class="btn" type="submit">Go</button></form>
       ${isSup() ? `<button class="btn ${editing ? 'dark' : ''}" type="button" id="medit">${editing ? 'Done placing' : 'Place machines'}</button>` : ''}
@@ -1384,6 +1450,7 @@ route('/map', async () => {
   <div class="row small" style="gap:16px;margin-top:-8px">
       ${Object.values(PIN).map((p) => `<span class="row" style="gap:6px"><span style="width:14px;height:14px;border-radius:999px;background:${p.fill};border:2px solid #fff;box-shadow:0 0 0 1px #94A3B8;display:inline-block"></span>${p.label}</span>`).join('')}
   </div>
+  <div id="mcount" class="small" style="font-weight:600"></div>
   <div id="mcard"></div>
   <div id="medpanel"></div>`;
   app.innerHTML = floorShell('', body);
@@ -1446,21 +1513,41 @@ route('/map', async () => {
     pinLayer.innerHTML = '';
     placed().forEach((a) => {
       const inDept = !dept || a.department === dept || a.shared.includes(dept);
-      const st = PIN[pinState(a)];
+      const st = PIN[pinState(a, freq)];
       const g = document.createElementNS(NS, 'g');
       g.setAttribute('transform', `translate(${a.map_x} ${a.map_y})`);
       g.setAttribute('opacity', inDept ? '1' : '0.25');
       const sel = a.id === selected || a.id === placing;
-      g.innerHTML = `${sel ? `<circle r="${r * 1.9}" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}
+      const rs = roadSize(a), big = rs && rs[0] * s >= 16;   // draw the vehicle shape once it's at least 16 px long
+      const top = big ? Math.max(rs[0], rs[1]) / 2 : r;
+      g.innerHTML = big
+        ? `<g transform="rotate(${a.map_rot || 0})">${sel ? `<rect x="${-rs[0] / 2 - 1}" y="${-rs[1] / 2 - 1}" width="${rs[0] + 2}" height="${rs[1] + 2}" rx="1.5" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}${roadShape(a, st.fill, 1.2 / s)}</g>
+        ${showLabels || sel ? `<text y="${-top - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`
+        : `${sel ? `<circle r="${r * 1.9}" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}
         <circle r="${r}" fill="${st.fill}" stroke="#1C1F23" stroke-opacity=".35" stroke-width="${1.5 / s}"/>
         ${showLabels || sel ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
       pinLayer.appendChild(g);
     });
+    drawCount();
+  }
+  function drawCount() {
+    const el = $('#mcount'); if (!el) return;
+    const inD = activeAssets().filter((a) => !dept || a.department === dept || a.shared.includes(dept));
+    const cs = inD.flatMap((a) => a.checks.filter((c) => (!freq || c.frequency === freq) && a.status !== 'down'));
+    const n = { overdue: 0, due: 0, done: 0 };
+    cs.forEach((c) => { const k = checkPin(c); if (n[k] != null) n[k]++; });
+    const off = inD.filter((a) => a.map_x == null && a.checks.some((c) => (!freq || c.frequency === freq) && c.state === 'due')).length;
+    el.innerHTML = `${esc(freq ? FREQ[freq] : 'All checks')}${dept ? ' · ' + esc(dept) : ''}: <span style="color:#2563EB">${n.due} due</span> · <span style="color:#EA580C">${n.overdue} overdue</span> · <span class="t-ok">${n.done} done</span>${off ? ` <span class="muted" style="font-weight:400">· ${off} with checks due aren't on the map yet</span>` : ''}`;
   }
   function nearestPin(pt) {
     const s = scale(); let best = null, bd = Infinity;
-    placed().forEach((a) => { const d = Math.hypot(a.map_x - pt.x, a.map_y - pt.y) * s; if (d < bd) { bd = d; best = a; } });
-    return bd <= 26 ? best : null;   // within 26 px of the finger
+    placed().forEach((a) => {
+      const rs = roadSize(a);
+      const reach = rs ? Math.max(26, (rs[0] / 2) * s) : 26;   // a long vehicle can be tapped anywhere along it
+      const d = Math.hypot(a.map_x - pt.x, a.map_y - pt.y) * s;
+      if (d <= reach && d - reach < bd) { bd = d - reach; best = a; }
+    });
+    return best;
   }
 
   // --- card for the tapped machine
@@ -1469,11 +1556,13 @@ route('/map', async () => {
     if (!a) { $('#mcard').innerHTML = ''; return; }
     const ds = dailyState(a);
     const other = a.checks.filter((c) => c.frequency !== 'daily' && c.state === 'due');
+    const pick = a.checks.filter((c) => (!freq || c.frequency === freq) && c.state === 'due');
     $('#mcard').innerHTML = `<div class="card row" style="justify-content:space-between;gap:16px">
       <div class="stack" style="gap:4px"><div class="row" style="gap:10px"><b style="font-size:19px">${esc(a.id)} · ${esc(a.name)}</b>${statusChip(a.status)}</div>
         <span class="small muted">${esc([a.department, a.shared.length ? 'shared with ' + a.shared.join(', ') : ''].filter(Boolean).join(' · '))}</span>
         <span class="small ${ds.cls}" style="font-weight:600">${esc(ds.text)}${other.length ? ' · ' + other.map((c) => FREQ[c.frequency]).join(', ') + ' due' : ''}</span></div>
-      <div class="row"><a class="btn primary big" href="#/m/${encodeURIComponent(a.id)}">Log maintenance</a>
+      <div class="row">${pick.map((c) => `<a class="btn ${checkPin(c) === 'overdue' ? 'danger' : 'primary'} big" href="#/m/${encodeURIComponent(a.id)}/check/${c.checklist_id}">Start ${esc(FREQ[c.frequency].toLowerCase())}${checkPin(c) === 'overdue' ? ' (overdue)' : ''}</a>`).join('')}
+        <a class="btn ${pick.length ? '' : 'primary'} big" href="#/m/${encodeURIComponent(a.id)}">${pick.length ? 'All checks' : 'Log maintenance'}</a>
         ${profile.role !== 'tablet' ? `<a class="btn big" href="#/machine/${encodeURIComponent(a.id)}">Details</a>` : ''}</div></div>`;
   }
 
@@ -1484,10 +1573,16 @@ route('/map', async () => {
     const un = list.filter((a) => a.map_x == null).length;
     $('#medpanel').innerHTML = `<section class="card stack"><h2 style="margin:0">Place machines</h2>
       <p class="small muted" style="margin:0">${placing ? `Tap the map where <b>${esc(placing)}</b> goes.` : 'Pick a machine, then tap the map where it sits. Tapping a pin picks that machine so you can move it.'} ${un} not placed yet.</p>
-      ${placing && core.assetById[placing].map_x != null ? `<button class="btn sm danger" type="button" id="munplace" style="align-self:flex-start">Take ${esc(placing)} off the map</button>` : ''}
+      ${placing && core.assetById[placing].map_x != null ? `<div class="row" style="gap:8px">${roadSize(core.assetById[placing]) ? `<span class="small muted">Turn ${esc(placing)}:</span><button class="btn sm" type="button" data-rot="-15">⟲ 15°</button><button class="btn sm" type="button" data-rot="15">⟳ 15°</button><button class="btn sm" type="button" data-rot="90">⟳ 90°</button>` : ''}<button class="btn sm danger" type="button" id="munplace">Take ${esc(placing)} off the map</button></div>` : ''}
       <div class="row" style="gap:8px">${list.map((a) => `<button type="button" class="pill" data-place="${esc(a.id)}" aria-pressed="${a.id === placing}" title="${esc(a.name)}">${a.map_x == null ? '● ' : ''}${esc(a.id.replace(/^FUSE-/, ''))}</button>`).join('')}</div>
       <span class="tiny muted">● = not on the map yet</span></section>`;
     $$('[data-place]').forEach((b) => b.addEventListener('click', () => { placing = b.dataset.place; selected = null; showCard(); drawEditPanel(); drawPins(); const a = core.assetById[placing]; if (a.map_x != null) centerOn(a, Math.min(vb.w, 120)); }));
+    $$('[data-rot]').forEach((b) => b.addEventListener('click', () => busy(b, async () => {
+      const a = core.assetById[placing];
+      const rot = (((a.map_rot || 0) + Number(b.dataset.rot)) % 360 + 360) % 360;
+      await q(sb.from('assets').update({ map_rot: rot }).eq('id', a.id));
+      a.map_rot = rot; drawPins();
+    })));
     const un2 = $('#munplace');
     if (un2) un2.addEventListener('click', () => busy(un2, async () => {
       await q(sb.from('assets').update({ map_x: null, map_y: null }).eq('id', placing));
@@ -1564,6 +1659,7 @@ route('/map', async () => {
   $('#zout').addEventListener('click', () => zoomAt(1.5, box.clientWidth / 2, box.clientHeight / 2));
   $('#zfit').addEventListener('click', fit);
   $('#mdept').addEventListener('change', (e) => { dept = e.target.value; drawPins(); });
+  $('#mfreq').addEventListener('change', (e) => { freq = e.target.value; drawPins(); showCard(); });
   $('#mfind').addEventListener('submit', (e) => {
     e.preventDefault();
     const t = formData(e.target).t.toUpperCase().replace(/\s+/g, '');
