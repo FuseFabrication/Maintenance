@@ -1083,7 +1083,8 @@ route('/reports', async () => {
   const sel = (name, opts, val, label) => `<label class="sr" for="r-${name}">${label}</label><select id="r-${name}" name="${name}">${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
   const body = `
   <div class="head"><div><h1>Reports</h1><p class="muted" style="margin:4px 0 0">Every completed check: what was done, when, and by whom. Skipped and missed checks are on the Exceptions page.</p></div>
-    <button class="btn" type="button" id="csv">Export CSV</button></div>
+    <div class="row"><button class="btn" type="button" id="csv">Export CSV (Excel)</button><button class="btn primary" type="button" id="pdf">Print / Save PDF</button></div></div>
+  ${reportTabs('')}
   <section class="grid g4">
     <div class="card tile"><span class="small muted">Checks completed</span><span class="n">${rows.length}</span><span class="small muted">${fmtShort(f.from)} to ${fmtShort(f.to)}</span></div>
     <div class="card tile"><span class="small muted">Machines covered</span><span class="n">${machines}</span></div>
@@ -1112,8 +1113,318 @@ route('/reports', async () => {
   $$('#rf select, #rf input').forEach((s) => s.addEventListener('change', () => {
     location.hash = '#/reports?' + new URLSearchParams(formData($('#rf')));
   }));
+  $('#pdf').addEventListener('click', () => printReport('Completed Maintenance Checks', `${fmtDate(f.from)} to ${fmtDate(f.to)}${f.dept ? ' · ' + f.dept : ''}${f.freq ? ' · ' + FREQ[f.freq] : ''}`,
+    `<div class="tiles"><div class="tile">Checks completed<b>${rows.length}</b></div><div class="tile">Machines<b>${machines}</b></div><div class="tile">With a failed item<b>${fails}</b></div><div class="tile">People<b>${Object.keys(people).length}</b></div></div>`
+    + pTable(['Done', 'Machine', 'Checklist', 'Interval', 'By', 'Result', 'Notes'], rows.map((x) => [esc(fmtTime(x.performed_at)), `<b>${esc(x.asset_id)}</b><br><span class="muted">${esc(x.a.name || '')}</span>`, `${esc(x.c.title || '')}<br><span class="muted">${esc(x.c.doc_id || '')} rev ${esc(x.revision ?? '')}</span>`, esc(FREQ[x.frequency] || x.frequency), esc(x.performed_by), x.result === 'fail' ? '<span class="bad">Failed item</span>' : '<span class="ok">Pass</span>', esc(x.notes || '')]))));
   $('#csv').addEventListener('click', () => csvDownload(`completed-checks-${f.from}-to-${f.to}.csv`, [['Done at', 'Machine ID', 'Machine', 'Department', 'Checklist', 'Document', 'Revision', 'Frequency', 'Done by group', 'Done by', 'Period start', 'Result', 'Notes'],
     ...rows.map((x) => [fmtTime(x.performed_at), x.asset_id, x.a.name || '', x.a.department || '', x.c.title || '', x.c.doc_id || '', x.revision ?? '', FREQ[x.frequency] || x.frequency, x.c.assigned_group || '', x.performed_by, x.period_start, x.result === 'fail' ? 'Failed item' : 'Pass', x.notes || ''])]));
+}, { sup: true });
+
+// ---------------------------------------------------------------- report helpers (tabs, PDF print)
+const REPORT_TABS = [['', 'Completed checks'], ['compliance', 'Compliance summary'], ['safety', 'Safety equipment log'], ['vehicles', 'Vehicles'], ['repairs', 'Repairs & downtime']];
+function reportTabs(active) {
+  return `<div class="row" role="tablist">${REPORT_TABS.map(([k, t]) => `<a role="tab" aria-selected="${k === active}" class="pill" aria-pressed="${k === active}" href="#/reports${k ? '/' + k : ''}" style="display:inline-flex;align-items:center">${t}</a>`).join('')}</div>`;
+}
+// Opens a clean printable copy of a report; the browser's print dialog saves it as PDF.
+function printReport(title, sub, sectionsHtml) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups for this site to print or save the PDF', true); return; }
+  const by = profile && profile.display_name ? profile.display_name : '';
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+  <style>
+    @page{size:letter landscape;margin:12mm}
+    body{font-family:Inter,Arial,sans-serif;color:#1C1F23;font-size:10.5pt;margin:0}
+    header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1C1F23;padding-bottom:8px;margin-bottom:12px}
+    header img{height:38px} h1{font-size:17pt;margin:0} .sub{color:#555;margin-top:2px}
+    h2{font-size:12pt;margin:16px 0 6px} table{border-collapse:collapse;width:100%;margin-bottom:6px}
+    th,td{border:1px solid #BFC3C8;padding:4px 6px;text-align:left;vertical-align:top} th{background:#EEF0F2;font-size:9pt}
+    tr{page-break-inside:avoid} .bad{color:#991B1B;font-weight:700} .ok{color:#166534} .warn{color:#B45309;font-weight:600} .muted{color:#666}
+    .tiles{display:flex;gap:10px;margin:6px 0 4px} .tile{border:1px solid #BFC3C8;border-radius:6px;padding:6px 10px} .tile b{display:block;font-size:15pt}
+    .sign{display:flex;gap:40px;margin-top:28px} .sign div{flex:1;border-top:1px solid #1C1F23;padding-top:4px;font-size:9pt;color:#555}
+    footer{margin-top:14px;font-size:8.5pt;color:#666}
+  </style></head><body>
+  <header><div><h1>${esc(title)}</h1><div class="sub">${esc(sub)}</div></div><img src="${new URL('logo-fuse.png', location.href).href}" alt="Fuse Fabrication &amp; Machine"></header>
+  ${sectionsHtml}
+  <div class="sign"><div>Reviewed by</div><div>Signature</div><div>Date</div></div>
+  <footer>Fuse Asset Maintenance · generated ${esc(new Date().toLocaleString())}${by ? ' by ' + esc(by) : ''}</footer>
+  <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`);
+  w.document.close();
+}
+// Plain HTML table for the printable copy.
+const pTable = (head, rows) => `<table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${head.length}" class="muted">None</td></tr>`}</tbody></table>`;
+const pct = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : null);
+const pctTxt = (p) => (p == null ? '—' : p + '%');
+const pctCls = (p) => (p == null ? 'muted' : p >= 95 ? 't-ok' : p >= 80 ? 't-warn' : 't-bad');
+const rangeForm = (f, extra) => `<form id="rf" class="row">
+    <label>From<input type="date" name="from" value="${f.from}"></label>
+    <label>To<input type="date" name="to" value="${f.to}" max="${shopToday()}"></label>${extra || ''}</form>`;
+const selOpt = (name, opts, val, label) => `<label>${label}<select name="${name}">${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
+function wireRange(path) {
+  $$('#rf select, #rf input').forEach((s) => s.addEventListener('change', () => { location.hash = `#/reports/${path}?` + new URLSearchParams(formData($('#rf'))); }));
+}
+const exportBtns = '<div class="row"><button class="btn" type="button" id="csv">Export CSV (Excel)</button><button class="btn primary" type="button" id="pdf">Print / Save PDF</button></div>';
+
+// ---------------------------------------------------------------- compliance summary
+route('/reports/compliance', async () => {
+  app.innerHTML = officeShell('/reports', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const qs = query();
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-CA');
+  const f = { from: qs.get('from') || monthAgo, to: qs.get('to') || shopToday(), dept: qs.get('dept') || '', freq: qs.get('freq') || '', group: qs.get('group') || '' };
+  const [ins, sk, ms, cls] = await Promise.all([
+    q(sb.from('inspections').select('checklist_id,period_start,result').gte('period_start', f.from).lte('period_start', f.to).limit(20000)),
+    q(sb.from('skips').select('checklist_id,period_start,reason').gte('period_start', f.from).lte('period_start', f.to).limit(20000)),
+    q(sb.from('v_exceptions').select('checklist_id,period_start').eq('kind', 'missed').gte('period_start', f.from).lte('period_start', f.to)),
+    q(sb.from('checklists').select('id,asset_id,frequency,title,doc_id,assigned_group,active')),
+  ]);
+  const by = {};
+  cls.forEach((c) => { by[c.id] = { c, a: core.assetById[c.asset_id], done: new Set(), fail: 0, excused: new Set(), skipped: new Set(), missed: new Set() }; });
+  ins.forEach((x) => { const r = by[x.checklist_id]; if (!r) return; r.done.add(x.period_start); if (x.result === 'fail') r.fail++; });
+  sk.forEach((x) => { const r = by[x.checklist_id]; if (!r || r.done.has(x.period_start)) return; (['machine_down', 'not_in_use'].includes(x.reason) ? r.excused : r.skipped).add(x.period_start); });
+  ms.forEach((x) => { const r = by[x.checklist_id]; if (r && !r.done.has(x.period_start) && !r.skipped.has(x.period_start) && !r.excused.has(x.period_start)) r.missed.add(x.period_start); });
+  let rows = Object.values(by).filter((r) => r.a && r.a.status !== 'retired' && (r.c.active || r.done.size))
+    .map((r) => { const counted = r.done.size + r.skipped.size + r.missed.size; return { ...r, nDone: r.done.size, nEx: r.excused.size, nSk: r.skipped.size, nMiss: r.missed.size, p: pct(r.done.size, counted) }; })
+    .filter((r) => r.nDone + r.nEx + r.nSk + r.nMiss > 0);
+  if (f.dept) rows = rows.filter((r) => r.a.department === f.dept || r.a.shared.includes(f.dept));
+  if (f.freq) rows = rows.filter((r) => r.c.frequency === f.freq);
+  if (f.group) rows = rows.filter((r) => r.c.assigned_group === f.group);
+  rows.sort((x, y) => (x.p ?? 101) - (y.p ?? 101) || (x.a.id < y.a.id ? -1 : 1));
+  const sum = (rs) => { const d = rs.reduce((t, r) => t + r.nDone, 0), s = rs.reduce((t, r) => t + r.nSk, 0), m = rs.reduce((t, r) => t + r.nMiss, 0), e = rs.reduce((t, r) => t + r.nEx, 0); return { d, s, m, e, p: pct(d, d + s + m) }; };
+  const tot = sum(rows);
+  const group = (keyFn) => { const g = {}; rows.forEach((r) => { const k = keyFn(r); (g[k] = g[k] || []).push(r); }); return Object.entries(g).map(([k, rs]) => ({ k, ...sum(rs) })).sort((x, y) => (x.k < y.k ? -1 : 1)); };
+  const byDept = group((r) => r.a.department), byFreq = group((r) => FREQ[r.c.frequency] || r.c.frequency);
+  const sub = `${fmtDate(f.from)} to ${fmtDate(f.to)}${f.dept ? ' · ' + f.dept : ''}${f.freq ? ' · ' + FREQ[f.freq] : ''}${f.group ? ' · ' + (f.group === 'floor' ? 'Floor' : 'Maintenance') : ''}`;
+  const sumTable = (title, list) => `<section class="card flush"><h2 style="padding:16px 20px 0;margin:0">${title}</h2><div class="tablewrap"><table><thead><tr><th>${title.replace('By ', '')}</th><th>Done</th><th>Skipped</th><th>Missed</th><th>Excused</th><th>Completion</th></tr></thead><tbody>
+    ${list.map((g) => `<tr><td>${esc(g.k)}</td><td>${g.d}</td><td>${g.s}</td><td class="${g.m ? 't-bad' : ''}">${g.m}</td><td class="muted">${g.e}</td><td class="${pctCls(g.p)}" style="font-weight:700">${pctTxt(g.p)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No checks in this range.</td></tr>'}</tbody></table></div></section>`;
+  app.innerHTML = officeShell('/reports', `
+  <div class="head"><div><h1>Reports</h1><p class="muted" style="margin:4px 0 0">Compliance summary: how many check periods were done, skipped or missed. Machine-down and not-in-use skips are excused and don't count against completion. The current period only counts once it's done or over.</p></div>${exportBtns}</div>
+  ${reportTabs('compliance')}
+  ${rangeForm(f, selOpt('dept', [['', 'All departments'], ...core.depts.map((d) => [d, d])], f.dept, 'Department') + selOpt('freq', [['', 'All intervals'], ...FREQ_ORDER.map((x) => [x, FREQ[x]])], f.freq, 'Interval') + selOpt('group', [['', 'Floor and maintenance'], ['floor', 'Floor'], ['maintenance', 'Maintenance']], f.group, 'Done by'))}
+  <section class="grid g4">
+    <div class="card tile"><span class="small muted">Completion</span><span class="n ${pctCls(tot.p)}">${pctTxt(tot.p)}</span><span class="small muted">${esc(sub)}</span></div>
+    <div class="card tile"><span class="small muted">Periods done</span><span class="n">${tot.d}</span></div>
+    <div class="card tile"><span class="small muted">Skipped</span><span class="n">${tot.s}</span><span class="small muted">+ ${tot.e} excused</span></div>
+    <div class="card tile"><span class="small muted">Missed</span><span class="n ${tot.m ? 't-bad' : ''}">${tot.m}</span></div>
+  </section>
+  <div class="grid g2">${sumTable('By department', byDept)}${sumTable('By interval', byFreq)}</div>
+  <section class="card flush"><h2 style="padding:16px 20px 0;margin:0">By machine and checklist</h2><div class="tablewrap"><table><thead><tr><th>Machine</th><th>Checklist</th><th>Interval</th><th>Done</th><th>Failed item</th><th>Skipped</th><th>Missed</th><th>Excused</th><th>Completion</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td><a class="tag" href="#/machine/${encodeURIComponent(r.a.id)}" style="text-decoration:none">${esc(r.a.id)}</a><div class="tiny muted">${esc(r.a.name)}</div></td><td>${esc(r.c.title)}<div class="tiny muted">${esc(r.c.doc_id || '')}</div></td><td>${esc(FREQ[r.c.frequency] || '')}</td>
+    <td>${r.nDone}</td><td class="${r.fail ? 't-bad' : ''}">${r.fail}</td><td>${r.nSk}</td><td class="${r.nMiss ? 't-bad' : ''}">${r.nMiss}</td><td class="muted">${r.nEx}</td><td class="${pctCls(r.p)}" style="font-weight:700">${pctTxt(r.p)}</td></tr>`).join('') || '<tr><td colspan="9" class="muted" style="padding:28px;text-align:center">No checks in this range.</td></tr>'}
+  </tbody></table></div></section>`);
+  wireRange('compliance');
+  const head = ['Machine ID', 'Machine', 'Department', 'Checklist', 'Document', 'Interval', 'Done', 'Failed item', 'Skipped', 'Missed', 'Excused', 'Completion %'];
+  const line = (r) => [r.a.id, r.a.name, r.a.department, r.c.title, r.c.doc_id || '', FREQ[r.c.frequency] || '', r.nDone, r.fail, r.nSk, r.nMiss, r.nEx, r.p ?? ''];
+  $('#csv').addEventListener('click', () => csvDownload(`compliance-${f.from}-to-${f.to}.csv`, [
+    ['Compliance summary', sub], [], ['Overall', '', '', '', '', '', tot.d, '', tot.s, tot.m, tot.e, tot.p ?? ''], [],
+    ['Department', 'Done', 'Skipped', 'Missed', 'Excused', 'Completion %'], ...byDept.map((g) => [g.k, g.d, g.s, g.m, g.e, g.p ?? '']), [],
+    ['Interval', 'Done', 'Skipped', 'Missed', 'Excused', 'Completion %'], ...byFreq.map((g) => [g.k, g.d, g.s, g.m, g.e, g.p ?? '']), [],
+    head, ...rows.map(line)]));
+  $('#pdf').addEventListener('click', () => printReport('Maintenance Compliance Summary', sub, `
+    <div class="tiles"><div class="tile">Completion<b>${pctTxt(tot.p)}</b></div><div class="tile">Done<b>${tot.d}</b></div><div class="tile">Skipped<b>${tot.s}</b></div><div class="tile">Missed<b>${tot.m}</b></div><div class="tile">Excused<b>${tot.e}</b></div></div>
+    <h2>By department</h2>${pTable(['Department', 'Done', 'Skipped', 'Missed', 'Excused', 'Completion'], byDept.map((g) => [esc(g.k), g.d, g.s, g.m ? `<span class="bad">${g.m}</span>` : 0, g.e, pctTxt(g.p)]))}
+    <h2>By interval</h2>${pTable(['Interval', 'Done', 'Skipped', 'Missed', 'Excused', 'Completion'], byFreq.map((g) => [esc(g.k), g.d, g.s, g.m ? `<span class="bad">${g.m}</span>` : 0, g.e, pctTxt(g.p)]))}
+    <h2>By machine and checklist</h2>${pTable(['Machine', 'Checklist', 'Interval', 'Done', 'Failed item', 'Skipped', 'Missed', 'Excused', 'Completion'], rows.map((r) => [`<b>${esc(r.a.id)}</b><br><span class="muted">${esc(r.a.name)}</span>`, `${esc(r.c.title)}<br><span class="muted">${esc(r.c.doc_id || '')}</span>`, esc(FREQ[r.c.frequency] || ''), r.nDone, r.fail, r.nSk, r.nMiss ? `<span class="bad">${r.nMiss}</span>` : 0, r.nEx, pctTxt(r.p)]))}`));
+}, { sup: true });
+
+// ---------------------------------------------------------------- safety equipment log (exit lights, eyewash)
+const SAFETY_TYPES = ['Emergency Exit Light', 'Eyewash Station'];
+route('/reports/safety', async () => {
+  app.innerHTML = officeShell('/reports', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const qs = query();
+  const year = Number(qs.get('year')) || Number(shopToday().slice(0, 4));
+  const units = activeAssets().filter((a) => SAFETY_TYPES.includes(a.asset_type)).sort((x, y) => (x.asset_type < y.asset_type ? -1 : x.asset_type > y.asset_type ? 1 : x.id < y.id ? -1 : 1));
+  const ids = units.map((a) => a.id);
+  const [ins, sk] = ids.length ? await Promise.all([
+    q(sb.from('inspections').select('asset_id,frequency,period_start,performed_at,performed_by,result,notes').in('asset_id', ids).gte('period_start', `${year}-01-01`).lte('period_start', `${year}-12-31`).order('performed_at')),
+    q(sb.from('skips').select('asset_id,frequency,period_start,reason,reported_by').in('asset_id', ids).gte('period_start', `${year}-01-01`).lte('period_start', `${year}-12-31`)),
+  ]) : [[], []];
+  const today = shopToday(), curMonth = today.slice(0, 7);
+  const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+  const mName = (m) => new Date(m + '-15').toLocaleString('en-US', { month: 'short' });
+  const cell = (a, m) => {   // { txt, cls } for one unit, one month
+    const hasMonthly = a.checks.some((c) => c.frequency === 'monthly');
+    if (!hasMonthly) return { txt: '', cls: 'muted' };
+    const i = ins.filter((x) => x.asset_id === a.id && x.frequency === 'monthly' && x.period_start.slice(0, 7) === m);
+    if (i.length) { const x = i[i.length - 1]; return { txt: `${x.result === 'fail' ? '✗' : '✓'} ${fmtShort(x.performed_at.slice(0, 10))} ${initials(x.performed_by)}`, cls: x.result === 'fail' ? 't-bad' : 't-ok', fail: x.result === 'fail' }; }
+    const s = sk.find((x) => x.asset_id === a.id && x.frequency === 'monthly' && x.period_start.slice(0, 7) === m);
+    if (s) return { txt: 'Skipped', cls: 't-warn' };
+    const created = String(a.created_at || '').slice(0, 7);
+    if (m < created || m > curMonth) return { txt: '', cls: 'muted' };
+    if (m === curMonth) return { txt: 'Due', cls: 'muted' };
+    return { txt: 'MISSED', cls: 't-bad' };
+  };
+  const annual = (a) => {
+    const i = ins.filter((x) => x.asset_id === a.id && x.frequency === 'annual');
+    if (i.length) { const x = i[i.length - 1]; return { txt: `${x.result === 'fail' ? '✗' : '✓'} ${fmtShort(x.performed_at.slice(0, 10))} ${initials(x.performed_by)}`, cls: x.result === 'fail' ? 't-bad' : 't-ok' }; }
+    return { txt: a.checks.some((c) => c.frequency === 'annual') ? (String(year) < today.slice(0, 4) ? 'MISSED' : 'Not done yet') : '', cls: String(year) < today.slice(0, 4) ? 't-bad' : 'muted' };
+  };
+  const label = (a) => `${a.asset_type === 'Eyewash Station' ? 'Eyewash' : 'Exit light'} · ${a.location || a.name}`;
+  const years = []; for (let y = Number(today.slice(0, 4)); y >= 2026; y--) years.push(y);
+  const fails = ins.filter((x) => x.result === 'fail');
+  app.innerHTML = officeShell('/reports', `
+  <div class="head"><div><h1>Reports</h1><p class="muted" style="margin:4px 0 0">Safety equipment log: monthly tests (exit lights 30-second test, eyewash inspection) and the annual test for every exit light and eyewash station. ✓ = passed, with date and initials.</p></div>${exportBtns}</div>
+  ${reportTabs('safety')}
+  <form id="rf" class="row">${selOpt('year', years.map((y) => [y, y]), year, 'Year')}</form>
+  <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Unit</th>${months.map((m) => `<th>${mName(m)}</th>`).join('')}<th>Annual test</th></tr></thead><tbody>
+  ${units.map((a) => `<tr><td><a class="tag" href="#/machine/${encodeURIComponent(a.id)}" style="text-decoration:none">${esc(a.id.replace(/^FUSE-/, ''))}</a><div class="tiny muted">${esc(label(a))}</div></td>
+    ${months.map((m) => { const c = cell(a, m); return `<td class="small ${c.cls}" style="white-space:nowrap;font-weight:600">${esc(c.txt)}</td>`; }).join('')}
+    ${(() => { const c = annual(a); return `<td class="small ${c.cls}" style="white-space:nowrap;font-weight:600">${esc(c.txt)}</td>`; })()}</tr>`).join('') || '<tr><td colspan="14" class="muted" style="padding:28px;text-align:center">No exit lights or eyewash stations set up.</td></tr>'}
+  </tbody></table></div></section>
+  ${fails.length ? `<section class="card stack"><h2 style="margin:0">Failed items</h2>${fails.map((x) => `<div class="small"><b>${esc(x.asset_id)}</b> · ${esc(fmtDate(x.performed_at.slice(0, 10)))} · ${esc(x.performed_by)}${x.notes ? ' · ' + esc(x.notes) : ''}</div>`).join('')}</section>` : ''}`);
+  $$('#rf select').forEach((s) => s.addEventListener('change', () => { location.hash = '#/reports/safety?' + new URLSearchParams(formData($('#rf'))); }));
+  $('#csv').addEventListener('click', () => csvDownload(`safety-equipment-log-${year}.csv`, [
+    ['Safety equipment log', String(year)], [],
+    ['Unit', 'Type', 'Location', 'Department', ...months.map(mName), 'Annual test'],
+    ...units.map((a) => [a.id, a.asset_type, a.location || '', a.department, ...months.map((m) => cell(a, m).txt), annual(a).txt]),
+    [], ['Failed items'], ['Unit', 'Date', 'By', 'Notes'], ...fails.map((x) => [x.asset_id, x.performed_at.slice(0, 10), x.performed_by, x.notes || ''])]));
+  $('#pdf').addEventListener('click', () => printReport(`Safety Equipment Test Log – ${year}`, 'Emergency exit lights (monthly 30-second / annual 90-minute test, NFPA 101 7.9.3) and eyewash stations (OSHA 1910.151(c), ANSI Z358.1)',
+    pTable(['Unit', ...months.map(mName), 'Annual'], units.map((a) => [`<b>${esc(a.id.replace(/^FUSE-/, ''))}</b><br><span class="muted">${esc(label(a))}</span>`, ...months.map((m) => { const c = cell(a, m); return `<span class="${c.cls === 't-bad' ? 'bad' : c.cls === 't-ok' ? 'ok' : c.cls === 't-warn' ? 'warn' : 'muted'}">${esc(c.txt)}</span>`; }), (() => { const c = annual(a); return `<span class="${c.cls === 't-bad' ? 'bad' : c.cls === 't-ok' ? 'ok' : 'muted'}">${esc(c.txt)}</span>`; })()]))
+    + (fails.length ? '<h2>Failed items</h2>' + pTable(['Unit', 'Date', 'By', 'Notes'], fails.map((x) => [esc(x.asset_id), esc(fmtDate(x.performed_at.slice(0, 10))), esc(x.performed_by), esc(x.notes || '')])) : '')));
+}, { sup: true });
+
+// ---------------------------------------------------------------- vehicles
+route('/reports/vehicles', async () => {
+  app.innerHTML = officeShell('/reports', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const qs = query();
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-CA');
+  const f = { from: qs.get('from') || monthAgo, to: qs.get('to') || shopToday() };
+  const units = activeAssets().filter((a) => isRoadUnit(a.id)).sort((x, y) => (isVeh(y.id) - isVeh(x.id)) || (x.id < y.id ? -1 : 1));   // trucks first, then trailers
+  const ids = units.map((a) => a.id);
+  const [ins, logs, plans] = ids.length ? await Promise.all([
+    q(sb.from('inspections').select('asset_id,performed_at,performed_by,result,answers').in('asset_id', ids).lte('performed_at', f.to + 'T23:59:59.999').order('performed_at').limit(20000)),
+    q(sb.from('maintenance_logs').select('asset_id,kind,title,notes,done_by,done_on,odometer,created_at').in('asset_id', ids).lte('done_on', f.to).order('done_on').limit(20000)),
+    q(sb.from('outside_service_plans').select('asset_id,service,next_due,notes').in('asset_id', ids).eq('active', true)),
+  ]) : [[], [], []];
+  const inRange = (d) => d >= f.from && d <= f.to;
+  const rows = units.map((a) => {
+    const reads = [];
+    ins.filter((x) => x.asset_id === a.id).forEach((x) => (x.answers || []).forEach((y) => { if (/odometer/i.test(y.prompt || '') && y.value != null) reads.push({ d: x.performed_at.slice(0, 10), v: Number(y.value) }); }));
+    logs.filter((l) => l.asset_id === a.id && l.odometer != null).forEach((l) => reads.push({ d: l.done_on, v: Number(l.odometer) }));
+    reads.sort((x, y) => (x.d < y.d ? -1 : x.d > y.d ? 1 : x.v - y.v));
+    const before = reads.filter((r) => r.d < f.from), within = reads.filter((r) => inRange(r.d));
+    const start = before.length ? before[before.length - 1].v : within.length ? within[0].v : null;
+    const end = within.length ? within[within.length - 1].v : null;
+    const latest = reads.length ? reads[reads.length - 1].v : null;
+    const al = logs.filter((l) => l.asset_id === a.id);
+    const last = (k) => al.filter((l) => l.kind === k).slice(-1)[0];
+    const oil = last('oil_change'), tire = last('tires');
+    const plan = plans.find((p) => p.asset_id === a.id && /plate|tag/i.test(p.service));
+    return {
+      a, start, end, miles: start != null && end != null && end >= start ? end - start : null, latest,
+      trips: ins.filter((x) => x.asset_id === a.id && inRange(x.performed_at.slice(0, 10))).length,
+      tripFails: ins.filter((x) => x.asset_id === a.id && inRange(x.performed_at.slice(0, 10)) && x.result === 'fail').length,
+      oil, oilSince: oil && oil.odometer != null && latest != null && latest >= oil.odometer ? latest - oil.odometer : null,
+      tire, service: al.filter((l) => inRange(l.done_on)), plan,
+    };
+  });
+  const svc = rows.flatMap((r) => r.service.map((l) => ({ ...l, a: r.a }))).sort((x, y) => (x.done_on < y.done_on ? 1 : -1));
+  const totMiles = rows.reduce((t, r) => t + (r.miles || 0), 0);
+  const soon = rows.filter((r) => r.plan && r.plan.next_due && r.plan.next_due <= new Date(Date.now() + 45 * 86400000).toLocaleDateString('en-CA'));
+  const mi = (v) => (v == null ? '—' : Number(v).toLocaleString());
+  const sub = `${fmtDate(f.from)} to ${fmtDate(f.to)}`;
+  app.innerHTML = officeShell('/reports', `
+  <div class="head"><div><h1>Reports</h1><p class="muted" style="margin:4px 0 0">Vehicles and trailers: miles driven (from pre-trip and service odometer readings), pre-trips done, oil and tire service, and plate renewals.</p></div>${exportBtns}</div>
+  ${reportTabs('vehicles')}
+  ${rangeForm(f)}
+  <section class="grid g4">
+    <div class="card tile"><span class="small muted">Miles driven</span><span class="n">${totMiles.toLocaleString()}</span><span class="small muted">${esc(sub)}</span></div>
+    <div class="card tile"><span class="small muted">Pre-trips done</span><span class="n">${rows.reduce((t, r) => t + r.trips, 0)}</span></div>
+    <div class="card tile"><span class="small muted">Service entries</span><span class="n">${svc.length}</span></div>
+    <div class="card tile"><span class="small muted">Plates due in 45 days</span><span class="n ${soon.length ? 't-warn' : ''}">${soon.length}</span></div>
+  </section>
+  <section class="card flush"><div class="tablewrap"><table><thead><tr><th>Unit</th><th>Start mi</th><th>End mi</th><th>Miles</th><th>Pre-trips</th><th>Last oil change</th><th>Mi since oil</th><th>Last tire work</th><th>Plate renewal</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td><a class="tag" href="#/machine/${encodeURIComponent(r.a.id)}" style="text-decoration:none">${esc(r.a.id.replace(/^FUSE-/, ''))}</a><div class="tiny muted">${esc(r.a.name)}</div></td>
+    <td>${mi(r.start)}</td><td>${mi(r.end)}</td><td style="font-weight:700">${mi(r.miles)}</td><td>${r.trips}${r.tripFails ? ` <span class="t-bad">(${r.tripFails} failed)</span>` : ''}</td>
+    <td class="small">${isVeh(r.a.id) ? (r.oil ? `${esc(fmtDate(r.oil.done_on))}${r.oil.odometer != null ? ' @ ' + mi(r.oil.odometer) : ''}` : 'None logged') : '—'}</td><td>${isVeh(r.a.id) ? mi(r.oilSince) : '—'}</td>
+    <td class="small">${r.tire ? `${esc(fmtDate(r.tire.done_on))} · ${esc(r.tire.title)}` : 'None logged'}</td>
+    <td class="small ${r.plan && soon.includes(r) ? 't-warn' : ''}">${r.plan && r.plan.next_due ? esc(fmtDate(r.plan.next_due)) : '—'}</td></tr>`).join('') || '<tr><td colspan="9" class="muted" style="padding:28px;text-align:center">No vehicles set up.</td></tr>'}
+  </tbody></table></div></section>
+  <section class="card flush"><h2 style="padding:16px 20px 0;margin:0">Service logged in this range</h2><div class="tablewrap"><table><thead><tr><th>Date</th><th>Unit</th><th>Type</th><th>What was done</th><th>Odometer</th><th>By</th></tr></thead><tbody>
+  ${svc.map((l) => `<tr><td style="white-space:nowrap">${esc(fmtDate(l.done_on))}</td><td class="tag">${esc(l.a.id.replace(/^FUSE-/, ''))}</td><td>${esc(LOG_KIND[l.kind] || l.kind)}</td><td>${esc(l.title)}${l.notes ? `<div class="tiny muted">${esc(l.notes)}</div>` : ''}</td><td>${mi(l.odometer)}</td><td class="small">${esc(l.done_by)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted" style="padding:20px;text-align:center">No service logged in this range.</td></tr>'}
+  </tbody></table></div></section>`);
+  wireRange('vehicles');
+  $('#csv').addEventListener('click', () => csvDownload(`vehicles-${f.from}-to-${f.to}.csv`, [
+    ['Vehicle report', sub], [],
+    ['Unit', 'Name', 'Start mi', 'End mi', 'Miles', 'Pre-trips', 'Failed pre-trips', 'Last oil change', 'Oil change odometer', 'Miles since oil', 'Last tire work', 'Tire work date', 'Plate renewal due'],
+    ...rows.map((r) => [r.a.id, r.a.name, r.start ?? '', r.end ?? '', r.miles ?? '', r.trips, r.tripFails, r.oil ? r.oil.done_on : '', r.oil && r.oil.odometer != null ? r.oil.odometer : '', r.oilSince ?? '', r.tire ? r.tire.title : '', r.tire ? r.tire.done_on : '', r.plan && r.plan.next_due ? r.plan.next_due : '']),
+    [], ['Service logged'], ['Date', 'Unit', 'Type', 'What was done', 'Details', 'Odometer', 'By'],
+    ...svc.map((l) => [l.done_on, l.a.id, LOG_KIND[l.kind] || l.kind, l.title, l.notes || '', l.odometer ?? '', l.done_by])]));
+  $('#pdf').addEventListener('click', () => printReport('Vehicle & Trailer Report', sub, `
+    <div class="tiles"><div class="tile">Miles driven<b>${totMiles.toLocaleString()}</b></div><div class="tile">Pre-trips<b>${rows.reduce((t, r) => t + r.trips, 0)}</b></div><div class="tile">Service entries<b>${svc.length}</b></div><div class="tile">Plates due in 45 days<b>${soon.length}</b></div></div>
+    ${pTable(['Unit', 'Start mi', 'End mi', 'Miles', 'Pre-trips', 'Last oil change', 'Mi since oil', 'Last tire work', 'Plate due'], rows.map((r) => [`<b>${esc(r.a.id.replace(/^FUSE-/, ''))}</b><br><span class="muted">${esc(r.a.name)}</span>`, mi(r.start), mi(r.end), `<b>${mi(r.miles)}</b>`, r.trips + (r.tripFails ? ` <span class="bad">(${r.tripFails} failed)</span>` : ''), isVeh(r.a.id) ? (r.oil ? `${esc(fmtDate(r.oil.done_on))}${r.oil.odometer != null ? ' @ ' + mi(r.oil.odometer) : ''}` : 'None logged') : '—', isVeh(r.a.id) ? mi(r.oilSince) : '—', r.tire ? `${esc(fmtDate(r.tire.done_on))} · ${esc(r.tire.title)}` : 'None logged', r.plan && r.plan.next_due ? esc(fmtDate(r.plan.next_due)) : '—']))}
+    <h2>Service logged</h2>${pTable(['Date', 'Unit', 'Type', 'What was done', 'Odometer', 'By'], svc.map((l) => [esc(fmtDate(l.done_on)), esc(l.a.id.replace(/^FUSE-/, '')), esc(LOG_KIND[l.kind] || l.kind), esc(l.title) + (l.notes ? `<br><span class="muted">${esc(l.notes)}</span>` : ''), mi(l.odometer), esc(l.done_by)]))}`));
+}, { sup: true });
+
+// ---------------------------------------------------------------- repairs and downtime
+route('/reports/repairs', async () => {
+  app.innerHTML = officeShell('/reports', '<div class="loading">Loading…</div>');
+  await loadCore();
+  const qs = query();
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-CA');
+  const f = { from: qs.get('from') || monthAgo, to: qs.get('to') || shopToday(), dept: qs.get('dept') || '' };
+  const t0 = new Date(f.from + 'T00:00:00').getTime(), t1 = Math.min(new Date(f.to + 'T23:59:59.999').getTime(), Date.now());
+  const [probs, chg, logs] = await Promise.all([
+    q(sb.from('problems').select('asset_id,new_status,category,description,loto,reported_by,created_at').gte('created_at', f.from + 'T00:00:00').lte('created_at', f.to + 'T23:59:59.999').order('created_at', { ascending: false }).limit(5000)),
+    q(sb.from('status_changes').select('asset_id,new_status,created_at').lte('created_at', f.to + 'T23:59:59.999').order('created_at').limit(20000)),
+    q(sb.from('maintenance_logs').select('asset_id,kind,title,notes,done_by,done_on,odometer').gte('done_on', f.from).lte('done_on', f.to).order('done_on', { ascending: false }).limit(5000)),
+  ]);
+  // Hours spent down / limited inside the range, from the status change history.
+  const hrs = {};
+  const byAsset = {}; chg.forEach((c) => { (byAsset[c.asset_id] = byAsset[c.asset_id] || []).push(c); });
+  Object.entries(byAsset).forEach(([id, list]) => {
+    const h = { down: 0, limited: 0 };
+    list.forEach((c, i) => {
+      if (c.new_status !== 'down' && c.new_status !== 'limited') return;
+      const s = new Date(c.created_at).getTime(), e = i + 1 < list.length ? new Date(list[i + 1].created_at).getTime() : Date.now();
+      const ov = Math.min(e, t1) - Math.max(s, t0);
+      if (ov > 0) h[c.new_status] += ov / 3600000;
+    });
+    hrs[id] = h;
+  });
+  const inDept = (id) => { const a = core.assetById[id]; return a && (!f.dept || a.department === f.dept || a.shared.includes(f.dept)); };
+  const ids = new Set([...probs.map((p) => p.asset_id), ...logs.map((l) => l.asset_id), ...Object.keys(hrs).filter((id) => hrs[id].down + hrs[id].limited > 0)].filter(inDept));
+  const rows = [...ids].map((id) => ({ a: core.assetById[id], probs: probs.filter((p) => p.asset_id === id).length, down: (hrs[id] || {}).down || 0, limited: (hrs[id] || {}).limited || 0, repairs: logs.filter((l) => l.asset_id === id && l.kind === 'repair').length, work: logs.filter((l) => l.asset_id === id).length }))
+    .sort((x, y) => y.down - x.down || y.probs - x.probs || (x.a.id < y.a.id ? -1 : 1));
+  const P = probs.filter((p) => inDept(p.asset_id)), L = logs.filter((l) => inDept(l.asset_id));
+  const h1 = (v) => (v ? (Math.round(v * 10) / 10).toLocaleString() : '0');
+  const totDown = rows.reduce((t, r) => t + r.down, 0);
+  const sub = `${fmtDate(f.from)} to ${fmtDate(f.to)}${f.dept ? ' · ' + f.dept : ''}`;
+  const ST = { down: 'Down', limited: 'Limited', running: 'Running' };
+  app.innerHTML = officeShell('/reports', `
+  <div class="head"><div><h1>Reports</h1><p class="muted" style="margin:4px 0 0">Repairs and downtime: problems reported, hours each machine spent Down or Limited (from its status history), and repairs and other work logged.</p></div>${exportBtns}</div>
+  ${reportTabs('repairs')}
+  ${rangeForm(f, selOpt('dept', [['', 'All departments'], ...core.depts.map((d) => [d, d])], f.dept, 'Department'))}
+  <section class="grid g4">
+    <div class="card tile"><span class="small muted">Problems reported</span><span class="n">${P.length}</span><span class="small muted">${esc(sub)}</span></div>
+    <div class="card tile"><span class="small muted">Hours down</span><span class="n ${totDown ? 't-bad' : ''}">${h1(totDown)}</span></div>
+    <div class="card tile"><span class="small muted">Repairs logged</span><span class="n">${L.filter((l) => l.kind === 'repair').length}</span></div>
+    <div class="card tile"><span class="small muted">All work logged</span><span class="n">${L.length}</span></div>
+  </section>
+  <section class="card flush"><h2 style="padding:16px 20px 0;margin:0">By machine</h2><div class="tablewrap"><table><thead><tr><th>Machine</th><th>Department</th><th>Problems</th><th>Hours down</th><th>Hours limited</th><th>Repairs</th><th>All work logged</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td><a class="tag" href="#/machine/${encodeURIComponent(r.a.id)}" style="text-decoration:none">${esc(r.a.id)}</a><div class="tiny muted">${esc(r.a.name)}</div></td><td class="small">${esc(r.a.department)}</td><td>${r.probs}</td><td class="${r.down ? 't-bad' : ''}" style="font-weight:700">${h1(r.down)}</td><td>${h1(r.limited)}</td><td>${r.repairs}</td><td>${r.work}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:28px;text-align:center">No problems, downtime or work logged in this range.</td></tr>'}
+  </tbody></table></div></section>
+  <section class="card flush"><h2 style="padding:16px 20px 0;margin:0">Problems reported</h2><div class="tablewrap"><table><thead><tr><th>When</th><th>Machine</th><th>Set to</th><th>Problem</th><th>Reported by</th></tr></thead><tbody>
+  ${P.map((p) => `<tr><td style="white-space:nowrap">${esc(fmtTime(p.created_at))}</td><td class="tag">${esc(p.asset_id)}</td><td>${esc(ST[p.new_status] || p.new_status || '')}${p.loto ? ' · LOTO' : ''}</td><td>${p.category ? `<b>${esc(p.category)}</b> · ` : ''}${esc(p.description)}</td><td class="small">${esc(p.reported_by)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:20px;text-align:center">None.</td></tr>'}
+  </tbody></table></div></section>
+  <section class="card flush"><h2 style="padding:16px 20px 0;margin:0">Repairs and work logged</h2><div class="tablewrap"><table><thead><tr><th>Date</th><th>Machine</th><th>Type</th><th>What was done</th><th>By</th></tr></thead><tbody>
+  ${L.map((l) => `<tr><td style="white-space:nowrap">${esc(fmtDate(l.done_on))}</td><td class="tag">${esc(l.asset_id)}</td><td>${esc(LOG_KIND[l.kind] || l.kind)}</td><td>${esc(l.title)}${l.notes ? `<div class="tiny muted">${esc(l.notes)}</div>` : ''}</td><td class="small">${esc(l.done_by)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted" style="padding:20px;text-align:center">None.</td></tr>'}
+  </tbody></table></div></section>`);
+  wireRange('repairs');
+  $('#csv').addEventListener('click', () => csvDownload(`repairs-downtime-${f.from}-to-${f.to}.csv`, [
+    ['Repairs and downtime', sub], [],
+    ['Machine ID', 'Machine', 'Department', 'Problems', 'Hours down', 'Hours limited', 'Repairs', 'All work logged'],
+    ...rows.map((r) => [r.a.id, r.a.name, r.a.department, r.probs, Math.round(r.down * 10) / 10, Math.round(r.limited * 10) / 10, r.repairs, r.work]),
+    [], ['Problems reported'], ['When', 'Machine ID', 'Set to', 'Category', 'Problem', 'LOTO', 'Reported by'],
+    ...P.map((p) => [fmtTime(p.created_at), p.asset_id, ST[p.new_status] || p.new_status || '', p.category || '', p.description, p.loto ? 'Yes' : '', p.reported_by]),
+    [], ['Repairs and work logged'], ['Date', 'Machine ID', 'Type', 'What was done', 'Details', 'By'],
+    ...L.map((l) => [l.done_on, l.asset_id, LOG_KIND[l.kind] || l.kind, l.title, l.notes || '', l.done_by])]));
+  $('#pdf').addEventListener('click', () => printReport('Repairs & Downtime Report', sub, `
+    <div class="tiles"><div class="tile">Problems reported<b>${P.length}</b></div><div class="tile">Hours down<b>${h1(totDown)}</b></div><div class="tile">Repairs logged<b>${L.filter((l) => l.kind === 'repair').length}</b></div><div class="tile">All work logged<b>${L.length}</b></div></div>
+    <h2>By machine</h2>${pTable(['Machine', 'Department', 'Problems', 'Hours down', 'Hours limited', 'Repairs', 'All work'], rows.map((r) => [`<b>${esc(r.a.id)}</b><br><span class="muted">${esc(r.a.name)}</span>`, esc(r.a.department), r.probs, r.down ? `<span class="bad">${h1(r.down)}</span>` : '0', h1(r.limited), r.repairs, r.work]))}
+    <h2>Problems reported</h2>${pTable(['When', 'Machine', 'Set to', 'Problem', 'Reported by'], P.map((p) => [esc(fmtTime(p.created_at)), esc(p.asset_id), esc(ST[p.new_status] || p.new_status || '') + (p.loto ? ' · LOTO' : ''), (p.category ? `<b>${esc(p.category)}</b> · ` : '') + esc(p.description), esc(p.reported_by)]))}
+    <h2>Repairs and work logged</h2>${pTable(['Date', 'Machine', 'Type', 'What was done', 'By'], L.map((l) => [esc(fmtDate(l.done_on)), esc(l.asset_id), esc(LOG_KIND[l.kind] || l.kind), esc(l.title) + (l.notes ? `<br><span class="muted">${esc(l.notes)}</span>` : ''), esc(l.done_by)]))}`));
 }, { sup: true });
 
 // ---------------------------------------------------------------- admin
@@ -1522,10 +1833,16 @@ route('/map', async () => {
       const top = big ? Math.max(rs[0], rs[1]) / 2 : r;
       g.innerHTML = big
         ? `<g transform="rotate(${a.map_rot || 0})">${sel ? `<rect x="${-rs[0] / 2 - 1}" y="${-rs[1] / 2 - 1}" width="${rs[0] + 2}" height="${rs[1] + 2}" rx="1.5" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}${roadShape(a, st.fill, 1.2 / s)}</g>
+        ${(() => {   // vehicle number painted on the roof/deck, along its length, never upside down
+          const rot = ((a.map_rot || 0) % 360 + 360) % 360, up = rot > 90 && rot <= 270 ? rot + 180 : rot;
+          const num = a.id.replace(/^FUSE-(VEH|TRL)-/, '');
+          const fsz = Math.max(Math.min(rs[1] * 0.62, (rs[0] * 0.8) / (num.length * 0.62)), 12 / s);   // at least 12 px on screen
+          return `<text transform="rotate(${up})" x="0" y="0" text-anchor="middle" dominant-baseline="central" font-size="${fsz}" style="font-family:Inter,Arial,sans-serif;font-weight:800;fill:#fff;paint-order:stroke;stroke:#1C1F23;stroke-width:${fsz * 0.16}px;stroke-linejoin:round">${esc(num)}</text>`;
+        })()}
         ${showLabels || sel ? `<text y="${-top - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`
         : `${sel ? `<circle r="${r * 1.9}" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}
         <circle r="${r}" fill="${st.fill}" stroke="#1C1F23" stroke-opacity=".35" stroke-width="${1.5 / s}"/>
-        ${showLabels || sel ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
+        ${showLabels || sel || rs ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
       pinLayer.appendChild(g);
     });
     drawCount();
