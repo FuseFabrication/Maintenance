@@ -1,4 +1,5 @@
-/* Fuse Fabrication – Maintenance Log
+/* Mike Lamarca 25Nov2026 mike@acramal.com
+   Fuse Fabrication – Maintenance Log
    Plain JavaScript, no build step. Talks to Supabase (see config.js). */
 (function () {
 'use strict';
