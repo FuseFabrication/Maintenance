@@ -656,7 +656,7 @@ route('/machine/([^/?]+)', async (id) => {
   const yn = (v) => (v === true ? 'Yes' : v === false ? 'No' : '—');
   const body = `
   <nav aria-label="Breadcrumb" class="small" style="font-weight:600"><a href="#/machines?dept=${encodeURIComponent(a.department || '')}" style="text-decoration:none">${esc(a.department || 'Machines')}</a> / ${esc(a.id)}</nav>
-  <div class="head"><div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}</h1>${statusChip(a.status)}</div>
+  <div class="head"><div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}${clipIcon(a)}</h1>${statusChip(a.status)}</div>
     <span class="muted">${esc([a.department ? a.department + ' department' : '', a.manufacturer, a.model, a.serial ? 'Serial ' + a.serial : ''].filter(Boolean).join(' · '))}</span></div>
     <div class="row">${isSup() ? `<a class="btn" href="#/admin/asset/${encodeURIComponent(id)}">Edit machine</a>` : ''}<a class="btn primary" href="#/m/${encodeURIComponent(id)}">Open on shop floor</a></div></div>
   ${a.needs_review ? `<div class="notice small"><b>Needs review:</b> ${esc(a.notes || 'Some details are missing.')}</div>` : ''}
@@ -1625,12 +1625,12 @@ route('/floor/pick', async () => {
     const otherDue = a.checks.filter((c) => c.frequency !== 'daily' && c.state === 'due');
     return `<a class="mtile ${ds.st === 'due' ? 'due' : ''}" href="#/m/${encodeURIComponent(a.id)}">
       <div class="row" style="justify-content:space-between;gap:8px"><span class="t">${esc(a.id.replace(/^FUSE-/, ''))}</span>${statusChip(a.status)}</div>
-      <span style="font-weight:500">${esc(a.name)}</span>
+      <span style="font-weight:500">${esc(a.name)}${clipIcon(a)}</span>
       ${dept && a.department !== dept ? `<span class="row" style="gap:6px">${chip('Shared', 'c-info')}<span class="tiny muted">owned by ${esc(a.department)}</span></span>` : ''}
       <span style="margin-top:auto;font-weight:700;font-size:14px" class="${ds.cls}">${esc(ds.text)}</span>
       ${otherDue.length ? `<span class="tiny t-warn" style="font-weight:600">${otherDue.map((c) => FREQ[c.frequency]).join(', ')} due</span>` : ''}</a>`;
   }).join('') || '<p class="muted">No machines in this department.</p>'}</div>
-  <p class="small muted" style="margin:0;text-align:center">Shared machines like cranes and forklifts show in every department that uses them. They only need one check, so if someone already did it, it shows as done for everyone.</p>
+  <p class="small muted" style="margin:0;text-align:center"><span class="clipwrap" style="margin:0">${CLIP}</span> = manual uploaded for this machine. Shared machines like cranes and forklifts show in every department that uses them. They only need one check, so if someone already did it, it shows as done for everyone.</p>
   <div class="row" style="padding-top:8px;border-top:1px solid var(--line);justify-content:center"><span class="small muted">Different department?</span>
     ${['', ...core.depts].map((d) => `<a class="pill" aria-pressed="${d === dept}" href="#/floor/pick?dept=${encodeURIComponent(d)}" style="display:inline-flex;align-items:center;height:44px">${esc(d || 'All')}</a>`).join('')}</div>`;
   app.innerHTML = floorShell('', body);
@@ -1665,7 +1665,7 @@ route('/m/([^/?]+)', async (id) => {
   const hist = [...recent[0].map((r) => ({ at: r.performed_at, t: `${FREQ[r.frequency]} check${r.result === 'fail' ? ' – item failed' : ''} · ${r.performed_by}` })),
     ...recent[1].map((r) => ({ at: r.created_at, t: `Problem: ${r.description} · ${r.reported_by}` }))].sort((x, y) => (x.at < y.at ? 1 : -1));
   const body = `
-  <div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}</h1>${statusChip(a.status)}</div>
+  <div class="stack" style="gap:6px"><div class="row"><h1>${esc(a.id)} · ${esc(a.name)}${clipIcon(a)}</h1>${statusChip(a.status)}</div>
     <span class="muted">${esc([a.department, ...(a.shared.length ? ['shared with ' + a.shared.join(', ')] : [])].filter(Boolean).join(' · '))}</span></div>
   ${a.status === 'down' ? '<div class="err"><b>This machine is marked Down.</b> Checks can still be logged, or skipped with "Machine is down".</div>' : ''}
   <section class="stack"><h2>Checklists</h2>
