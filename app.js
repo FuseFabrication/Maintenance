@@ -1257,7 +1257,7 @@ let layoutSvgText = null;
 const PIN = {
   down: { fill: '#991B1B', label: 'Down' },
   limited: { fill: '#EAB308', label: 'Limited' },
-  due: { fill: '#C2410C', label: 'Daily check due' },
+  due: { fill: '#2563EB', label: 'Daily check due' },
   done: { fill: '#166534', label: 'Checked today' },
   none: { fill: '#94A3B8', label: 'No daily check due' },
 };
