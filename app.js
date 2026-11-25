@@ -1334,16 +1334,28 @@ let layoutSvgText = null;
 const PIN = {
   down: { fill: '#991B1B', label: 'Down' },
   limited: { fill: '#EAB308', label: 'Limited' },
-  due: { fill: '#2563EB', label: 'Daily check due' },
-  done: { fill: '#166534', label: 'Checked today' },
-  none: { fill: '#94A3B8', label: 'No daily check due' },
+  overdue: { fill: '#EA580C', label: 'Overdue (a period was missed)' },
+  due: { fill: '#2563EB', label: 'Due' },
+  done: { fill: '#166534', label: 'Done this period' },
+  none: { fill: '#94A3B8', label: 'Nothing due' },
 };
-function pinState(a) {
+// Map "Checks" picker: '' = anything due, otherwise a frequency key.
+// A check is overdue when it is due now and a whole period has been missed since it was last done.
+let missedSince = {};   // checklist_id -> latest missed period_start (YYYY-MM-DD)
+function checkPin(c) {
+  if (c.state === 'done') return 'done';
+  if (c.state !== 'due') return 'none';
+  const m = missedSince[c.checklist_id];
+  return m && (!c.last_done_at || m > String(c.last_done_at).slice(0, 10)) ? 'overdue' : 'due';
+}
+function pinState(a, freq) {
   if (a.status === 'down') return 'down';
   if (a.status === 'limited') return 'limited';
-  const st = dailyState(a).st;
-  if (st === 'due') return 'due';
-  if (st === 'done') return 'done';
+  const cs = freq ? a.checks.filter((c) => c.frequency === freq) : a.checks;
+  const st = cs.map(checkPin);
+  if (st.includes('overdue')) return 'overdue';
+  if (st.includes('due')) return 'due';
+  if (freq ? st.includes('done') : (cs.length && st.includes('done'))) return 'done';
   return 'none';
 }
 
@@ -1358,6 +1370,11 @@ route('/map', async () => {
   const hasCols = core.assets.length && 'map_x' in core.assets[0];
   const qs = query();
   let dept = qs.has('dept') ? qs.get('dept') : tabletDept();
+  let freq = qs.has('f') ? qs.get('f') : (profile.role === 'tablet' ? 'daily' : '');
+  try {
+    const ms = await q(sb.from('v_exceptions').select('checklist_id,period_start').eq('kind', 'missed'));
+    missedSince = {}; ms.forEach((m) => { if (!missedSince[m.checklist_id] || m.period_start > missedSince[m.checklist_id]) missedSince[m.checklist_id] = m.period_start; });
+  } catch (e) { missedSince = {}; }
   let editing = qs.get('edit') === '1' && isSup();
   let selected = qs.get('focus') || null;   // machine id shown in the card
   let placing = null;                        // machine id being placed (edit mode)
@@ -1367,6 +1384,7 @@ route('/map', async () => {
   <div class="row" style="justify-content:space-between;align-items:flex-end">
     <div><h1>Shop floor</h1><p class="muted" style="margin:6px 0 0">Tap a machine to log maintenance. Pinch or scroll to zoom, drag to move.</p></div>
     <div class="row">
+      <label class="small">Checks<select id="mfreq"><option value="">Anything due</option>${FREQ_ORDER.filter((f) => core.status.some((c) => c.frequency === f)).map((f) => `<option value="${f}" ${f === freq ? 'selected' : ''}>${FREQ[f]}</option>`).join('')}</select></label>
       <label class="small">Department<select id="mdept"><option value="">All</option>${core.depts.map((d) => `<option ${d === dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
       <form id="mfind" class="row" style="gap:6px;align-items:flex-end"><label class="small">Find<input name="t" placeholder="Tag, e.g. PB-001" style="width:150px;text-transform:uppercase"></label><button class="btn" type="submit">Go</button></form>
       ${isSup() ? `<button class="btn ${editing ? 'dark' : ''}" type="button" id="medit">${editing ? 'Done placing' : 'Place machines'}</button>` : ''}
@@ -1384,6 +1402,7 @@ route('/map', async () => {
   <div class="row small" style="gap:16px;margin-top:-8px">
       ${Object.values(PIN).map((p) => `<span class="row" style="gap:6px"><span style="width:14px;height:14px;border-radius:999px;background:${p.fill};border:2px solid #fff;box-shadow:0 0 0 1px #94A3B8;display:inline-block"></span>${p.label}</span>`).join('')}
   </div>
+  <div id="mcount" class="small" style="font-weight:600"></div>
   <div id="mcard"></div>
   <div id="medpanel"></div>`;
   app.innerHTML = floorShell('', body);
@@ -1446,7 +1465,7 @@ route('/map', async () => {
     pinLayer.innerHTML = '';
     placed().forEach((a) => {
       const inDept = !dept || a.department === dept || a.shared.includes(dept);
-      const st = PIN[pinState(a)];
+      const st = PIN[pinState(a, freq)];
       const g = document.createElementNS(NS, 'g');
       g.setAttribute('transform', `translate(${a.map_x} ${a.map_y})`);
       g.setAttribute('opacity', inDept ? '1' : '0.25');
@@ -1456,6 +1475,16 @@ route('/map', async () => {
         ${showLabels || sel ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
       pinLayer.appendChild(g);
     });
+    drawCount();
+  }
+  function drawCount() {
+    const el = $('#mcount'); if (!el) return;
+    const inD = activeAssets().filter((a) => !dept || a.department === dept || a.shared.includes(dept));
+    const cs = inD.flatMap((a) => a.checks.filter((c) => (!freq || c.frequency === freq) && a.status !== 'down'));
+    const n = { overdue: 0, due: 0, done: 0 };
+    cs.forEach((c) => { const k = checkPin(c); if (n[k] != null) n[k]++; });
+    const off = inD.filter((a) => a.map_x == null && a.checks.some((c) => (!freq || c.frequency === freq) && c.state === 'due')).length;
+    el.innerHTML = `${esc(freq ? FREQ[freq] : 'All checks')}${dept ? ' · ' + esc(dept) : ''}: <span style="color:#2563EB">${n.due} due</span> · <span style="color:#EA580C">${n.overdue} overdue</span> · <span class="t-ok">${n.done} done</span>${off ? ` <span class="muted" style="font-weight:400">· ${off} with checks due aren't on the map yet</span>` : ''}`;
   }
   function nearestPin(pt) {
     const s = scale(); let best = null, bd = Infinity;
@@ -1469,11 +1498,13 @@ route('/map', async () => {
     if (!a) { $('#mcard').innerHTML = ''; return; }
     const ds = dailyState(a);
     const other = a.checks.filter((c) => c.frequency !== 'daily' && c.state === 'due');
+    const pick = a.checks.filter((c) => (!freq || c.frequency === freq) && c.state === 'due');
     $('#mcard').innerHTML = `<div class="card row" style="justify-content:space-between;gap:16px">
       <div class="stack" style="gap:4px"><div class="row" style="gap:10px"><b style="font-size:19px">${esc(a.id)} · ${esc(a.name)}</b>${statusChip(a.status)}</div>
         <span class="small muted">${esc([a.department, a.shared.length ? 'shared with ' + a.shared.join(', ') : ''].filter(Boolean).join(' · '))}</span>
         <span class="small ${ds.cls}" style="font-weight:600">${esc(ds.text)}${other.length ? ' · ' + other.map((c) => FREQ[c.frequency]).join(', ') + ' due' : ''}</span></div>
-      <div class="row"><a class="btn primary big" href="#/m/${encodeURIComponent(a.id)}">Log maintenance</a>
+      <div class="row">${pick.map((c) => `<a class="btn ${checkPin(c) === 'overdue' ? 'danger' : 'primary'} big" href="#/m/${encodeURIComponent(a.id)}/check/${c.checklist_id}">Start ${esc(FREQ[c.frequency].toLowerCase())}${checkPin(c) === 'overdue' ? ' (overdue)' : ''}</a>`).join('')}
+        <a class="btn ${pick.length ? '' : 'primary'} big" href="#/m/${encodeURIComponent(a.id)}">${pick.length ? 'All checks' : 'Log maintenance'}</a>
         ${profile.role !== 'tablet' ? `<a class="btn big" href="#/machine/${encodeURIComponent(a.id)}">Details</a>` : ''}</div></div>`;
   }
 
@@ -1564,6 +1595,7 @@ route('/map', async () => {
   $('#zout').addEventListener('click', () => zoomAt(1.5, box.clientWidth / 2, box.clientHeight / 2));
   $('#zfit').addEventListener('click', fit);
   $('#mdept').addEventListener('change', (e) => { dept = e.target.value; drawPins(); });
+  $('#mfreq').addEventListener('change', (e) => { freq = e.target.value; drawPins(); showCard(); });
   $('#mfind').addEventListener('submit', (e) => {
     e.preventDefault();
     const t = formData(e.target).t.toUpperCase().replace(/\s+/g, '');
