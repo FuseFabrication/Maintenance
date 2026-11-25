@@ -620,7 +620,7 @@ route('/machine/([^/?]+)', async (id) => {
   await loadCore();
   const a = core.assetById[id];
   if (!a) { app.innerHTML = officeShell('/machines', `<div class="err">No machine with tag ${esc(id)}.</div>`); return; }
-  const [allCl, insp, skips, probs, chg, logs, corr, revs] = await Promise.all([
+  const [allCl, insp, skips, probs, chg, logs, corr, revs, mans] = await Promise.all([
     q(sb.from('checklists').select('*, checklist_items(count)').eq('asset_id', id).order('created_at')),
     q(sb.from('inspections').select('*').eq('asset_id', id).order('performed_at', { ascending: false }).limit(60)),
     q(sb.from('skips').select('*').eq('asset_id', id).order('created_at', { ascending: false }).limit(60)),
@@ -629,6 +629,7 @@ route('/machine/([^/?]+)', async (id) => {
     q(sb.from('maintenance_logs').select('*').eq('asset_id', id).order('created_at', { ascending: false }).limit(60)),
     q(sb.from('corrections').select('*').eq('asset_id', id).order('created_at', { ascending: false })),
     q(sb.from('checklist_revisions').select('checklist_id,revision,change_note,approved_by,effective_date,created_at').order('revision', { ascending: false })),
+    q(sb.from('asset_manuals').select('*').eq('asset_id', id).order('doc_type').order('title')),
   ]);
   const corrFor = (type, rid) => corr.filter((c) => c.target_type === type && c.target_id === rid);
   const corrHtml = (type, rid) => corrFor(type, rid).map((c) => `<div class="small" style="margin-top:6px;padding:8px 10px;background:var(--warn-bg);border-radius:6px"><b>Correction</b> by ${esc(c.corrected_by)}, ${fmtTime(c.created_at)}: ${esc(c.reason)}</div>`).join('');
@@ -667,6 +668,18 @@ route('/machine/([^/?]+)', async (id) => {
     }).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No checklists yet.</p>'}
   </section>
 
+  <section class="card flush" aria-labelledby="mnh"><div class="row" style="justify-content:space-between;padding:18px 22px 6px"><h2 id="mnh" style="margin:0">Manuals</h2>
+    ${isSup() ? '<button type="button" class="btn sm" id="addman">+ Add manual</button>' : ''}</div>
+    ${isSup() ? `<form id="manf" hidden class="row" style="padding:6px 22px 14px;gap:10px;align-items:flex-end"><label style="flex:1 1 220px">Title<input name="title" required></label>
+      <label>Type<select name="doc_type">${['operator', 'maintenance', 'service', 'parts', 'safety', 'electrical', 'programming', 'other'].map((t) => `<option>${t}</option>`).join('')}</select></label>
+      <label>Manual no.<input name="manual_no"></label><label>PDF (max 50 MB)<input name="file" type="file" accept="application/pdf"></label>
+      <button class="btn primary" type="submit">Save manual</button></form>` : ''}
+    ${mans.length ? `<div class="tablewrap"><table><thead><tr><th>Manual</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>${mans.map((m) => `<tr><td><div style="font-weight:600">${esc(m.title)}</div><div class="tiny muted">${esc([m.manual_no, m.notes].filter(Boolean).join(' · '))}</div></td>
+      <td class="small">${esc(m.doc_type)}</td><td>${m.storage_path ? chip('PDF on file', 'c-ok') : chip(({ on_file: 'Paper/other copy on file', link_found: 'Link found', purchase_needed: 'Purchase needed', request_from_oem: 'Request from maker', need_make_model: 'Need make/model', not_searched: 'Not searched' })[m.status] || m.status, 'c-grey')}</td>
+      <td><div class="row" style="gap:8px">${m.storage_path ? `<button type="button" class="btn sm" data-open="${esc(m.storage_path)}">Open PDF</button>` : /^https?:\/\//.test(m.url || '') ? `<a class="btn sm" href="${esc(m.url)}" target="_blank" rel="noopener">Open link</a>` : ''}
+        ${isSup() ? `<label class="btn sm" style="cursor:pointer">${m.storage_path ? 'Replace PDF' : 'Upload PDF'}<input type="file" accept="application/pdf" data-up="${esc(m.id)}" hidden></label>` : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted" style="padding:0 22px 18px">No manuals listed yet.</p>'}
+  </section>
+
   <div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr);align-items:start">
     <section class="card" aria-labelledby="hh"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 id="hh" style="margin:0">History</h2>
       <button type="button" class="btn sm" id="exp">Export CSV</button></div>
@@ -701,6 +714,35 @@ route('/machine/([^/?]+)', async (id) => {
   </div>`;
   app.innerHTML = officeShell('/machines', body, await exceptionBadge());
 
+  const uploadManual = async (manualId, file) => {
+    if (file.size > 50 * 1024 * 1024) throw new Error('That file is over 50 MB');
+    const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-80);
+    const path = `${id}/${manualId}-${safe}`;
+    const { error } = await sb.storage.from(MANUAL_BUCKET).upload(path, file, { contentType: 'application/pdf', upsert: true });
+    if (error) throw error;
+    await q(sb.from('asset_manuals').update({ storage_path: path, status: 'on_file', source: 'fuse_file', updated_at: new Date().toISOString() }).eq('id', manualId));
+  };
+  $$('[data-open]').forEach((b) => b.addEventListener('click', async () => {
+    const { data, error } = await sb.storage.from(MANUAL_BUCKET).createSignedUrl(b.dataset.open, 3600);
+    if (error) { toast(errMsg(error), true); return; }
+    const w = window.open('about:blank', '_blank');
+    if (w) { w.opener = null; w.location.href = data.signedUrl; } else { location.href = data.signedUrl; }
+  }));
+  $$('[data-up]').forEach((inp) => inp.addEventListener('change', () => {
+    const file = inp.files[0]; if (!file) return;
+    busy({ disabled: false, textContent: '' }, async () => { await uploadManual(inp.dataset.up, file); toast('PDF saved'); render(); });
+  }));
+  if ($('#addman')) {
+    $('#addman').addEventListener('click', () => { $('#manf').hidden = !$('#manf').hidden; });
+    $('#manf').addEventListener('submit', (e) => {
+      e.preventDefault(); const f = formData(e.target); const file = e.target.file.files[0];
+      busy($('button[type="submit"]', e.target), async () => {
+        const rows = await q(sb.from('asset_manuals').insert({ asset_id: id, title: f.title, doc_type: f.doc_type, manual_no: f.manual_no || '', source: 'fuse_file', status: file ? 'on_file' : 'not_searched' }).select());
+        if (file) await uploadManual(rows[0].id, file);
+        toast('Manual added'); render();
+      });
+    });
+  }
   $('#cpy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch (e) { toast('Copy failed – select the link and copy it', true); } });
   $('#prt').addEventListener('click', () => printLabel(a));
   $('#stf').addEventListener('submit', (e) => {
