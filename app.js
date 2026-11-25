@@ -736,7 +736,7 @@ route('/machine/([^/?]+)', async (id) => {
         <form id="lgf" class="stack">
           <label>Type<select name="kind" id="lgkind">${logKindsFor(id).map((k) => `<option value="${k}">${LOG_KIND[k]}</option>`).join('')}</select></label>
           <label>What was done<input name="title" id="lgtitle" required></label>
-          ${isVeh(id) ? '<label>Odometer (mi)<input name="odometer" id="lgodo" type="number" min="0" step="1" inputmode="numeric"></label>' : ''}
+          ${isVeh(id) ? '<label>Odometer (mi, required)<input name="odometer" id="lgodo" type="number" min="0" step="1" inputmode="numeric"></label>' : ''}
           <label>Details<textarea name="notes" rows="3"></textarea></label>
           <div class="grid g2" style="gap:10px"><label>Done by<input name="done_by" required value="${esc(profile.display_name)}"></label><label>Date<input name="done_on" type="date" value="${shopToday()}" max="${shopToday()}" required></label></div>
           <button class="btn dark" type="submit">Add to history</button></form></section>
@@ -849,7 +849,7 @@ route('/machine/([^/?]+)', async (id) => {
     const k = $('#lgkind').value, t = $('#lgtitle');
     t.placeholder = LOG_HINT[k] && k !== 'oil_change' ? LOG_HINT[k] : '';
     if (k === 'oil_change' && !t.value) t.value = LOG_HINT.oil_change;
-    if ($('#lgodo')) $('#lgodo').required = k === 'oil_change';
+    if ($('#lgodo')) $('#lgodo').required = true;
   };
   $('#lgkind').addEventListener('change', lgHint); lgHint();
   $('#lgf').addEventListener('submit', (e) => {
@@ -1903,7 +1903,7 @@ route('/m/([^/?]+)/log', async (id) => {
   <form id="lwf" class="stack" style="gap:18px">
     <label>Type<select name="kind" id="lwkind" style="height:56px">${kinds.map((k) => `<option value="${k}" ${k === pk ? 'selected' : ''}>${LOG_KIND[k]}</option>`).join('')}</select></label>
     <label>What was done (required)<input name="title" id="lwtitle" required style="height:56px"></label>
-    ${isVeh(id) ? '<label>Odometer (mi)<input name="odometer" id="lwodo" type="number" min="0" step="1" inputmode="numeric" style="height:56px"></label>' : ''}
+    ${isVeh(id) ? '<label>Odometer (mi, required)<input name="odometer" id="lwodo" type="number" min="0" step="1" inputmode="numeric" style="height:56px"></label>' : ''}
     <label>Details<textarea name="notes" rows="3"></textarea></label>
     <label>Date<input type="date" name="done_on" value="${shopToday()}" max="${shopToday()}" required style="height:56px"></label>
     ${a.status !== 'running' ? `<label class="choice"><input type="checkbox" name="back"> ${esc(a.id)} is fixed – mark it Running</label>` : ''}
@@ -1914,7 +1914,7 @@ route('/m/([^/?]+)/log', async (id) => {
     const k = $('#lwkind').value, t = $('#lwtitle');
     t.placeholder = LOG_HINT[k] && k !== 'oil_change' ? LOG_HINT[k] : '';
     if (k === 'oil_change' && !t.value) t.value = LOG_HINT.oil_change;
-    if ($('#lwodo')) $('#lwodo').required = k === 'oil_change';
+    if ($('#lwodo')) $('#lwodo').required = true;
   };
   $('#lwkind').addEventListener('change', lwHint); lwHint();
   $('#lwf').addEventListener('submit', (e) => {
