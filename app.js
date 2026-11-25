@@ -1339,6 +1339,32 @@ const PIN = {
   done: { fill: '#166534', label: 'Done this period' },
   none: { fill: '#94A3B8', label: 'Nothing due' },
 };
+// Vehicles and trailers draw as small top-down shapes at real size (feet), pointing along +x, rotated by assets.map_rot.
+// Sizes are typical overall length x width for each unit (trailers include the tongue).
+const ROAD_SIZE = {
+  'FUSE-VEH-1000': [19.5, 6.7], 'FUSE-VEH-1030': [22, 7.5], 'FUSE-VEH-1040': [22, 7.5], 'FUSE-VEH-1050': [23, 8],
+  'FUSE-VEH-1060': [19.5, 6.9], 'FUSE-VEH-1070': [21, 6.8], 'FUSE-VEH-1080': [17.6, 6.7],
+  'FUSE-TRL-T100': [27, 8.5], 'FUSE-TRL-T200': [22, 7], 'FUSE-TRL-T300': [20, 7.5], 'FUSE-TRL-T400': [12, 6],
+  'FUSE-TRL-T500': [24, 8.5], 'FUSE-TRL-T600': [29, 8.5],
+};
+const roadSize = (a) => ROAD_SIZE[a.id] || (/^FUSE-TRL-/.test(a.id) ? [20, 8] : /^FUSE-VEH-/.test(a.id) ? [20, 7] : null);
+// Original, generic top-down shapes (front of the vehicle / trailer tongue at +x).
+function roadShape(a, fill, sw) {
+  const [L, W] = roadSize(a), x0 = -L / 2, y0 = -W / 2, k = 'stroke="#1C1F23" stroke-opacity=".55" stroke-width="' + sw + '"';
+  if (/^FUSE-TRL-/.test(a.id)) {
+    const t = Math.min(4, L * 0.18), d = L - t;   // tongue length, deck length
+    return `<path d="M${x0 + d} ${-0.5} L${L / 2} 0 L${x0 + d} ${0.5}" fill="none" ${k}/>
+      <rect x="${x0}" y="${y0}" width="${d}" height="${W}" rx="0.6" fill="${fill}" ${k}/>
+      ${[0.3, 0.5, 0.7].map((f) => `<line x1="${x0 + d * f}" y1="${y0}" x2="${x0 + d * f}" y2="${-y0}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/>`).join('')}
+      <rect x="${x0 + d * 0.38}" y="${y0 - 0.5}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/><rect x="${x0 + d * 0.38}" y="${-y0}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/>`;
+  }
+  const hood = L * 0.17, cab = L * 0.3;          // hood and cab lengths; the rest is the bed / body
+  const bx = x0, bl = L - hood - cab;            // bed at the back
+  return `<rect x="${x0}" y="${y0}" width="${L}" height="${W}" rx="${W * 0.18}" fill="${fill}" ${k}/>
+    ${a.asset_type === 'SUV' ? '' : `<rect x="${bx + 0.6}" y="${y0 + 0.6}" width="${bl - 0.9}" height="${W - 1.2}" rx="0.4" fill="#000" fill-opacity=".18"/>`}
+    <rect x="${x0 + bl + cab * 0.62}" y="${y0 + 0.5}" width="${cab * 0.32}" height="${W - 1}" rx="0.5" fill="#BFE0FF" fill-opacity=".9" ${k}/>
+    <rect x="${x0 + bl + 0.3}" y="${y0 + 0.5}" width="${cab * 0.18}" height="${W - 1}" rx="0.4" fill="#BFE0FF" fill-opacity=".7"/>`;
+}
 // Map "Checks" picker: '' = anything due, otherwise a frequency key.
 // A check is overdue when it is due now and a whole period has been missed since it was last done.
 let missedSince = {};   // checklist_id -> latest missed period_start (YYYY-MM-DD)
@@ -1470,7 +1496,12 @@ route('/map', async () => {
       g.setAttribute('transform', `translate(${a.map_x} ${a.map_y})`);
       g.setAttribute('opacity', inDept ? '1' : '0.25');
       const sel = a.id === selected || a.id === placing;
-      g.innerHTML = `${sel ? `<circle r="${r * 1.9}" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}
+      const rs = roadSize(a), big = rs && rs[0] * s >= 16;   // draw the vehicle shape once it's at least 16 px long
+      const top = big ? Math.max(rs[0], rs[1]) / 2 : r;
+      g.innerHTML = big
+        ? `<g transform="rotate(${a.map_rot || 0})">${sel ? `<rect x="${-rs[0] / 2 - 1}" y="${-rs[1] / 2 - 1}" width="${rs[0] + 2}" height="${rs[1] + 2}" rx="1.5" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}${roadShape(a, st.fill, 1.2 / s)}</g>
+        ${showLabels || sel ? `<text y="${-top - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`
+        : `${sel ? `<circle r="${r * 1.9}" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}
         <circle r="${r}" fill="${st.fill}" stroke="#1C1F23" stroke-opacity=".35" stroke-width="${1.5 / s}"/>
         ${showLabels || sel ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
       pinLayer.appendChild(g);
@@ -1488,8 +1519,13 @@ route('/map', async () => {
   }
   function nearestPin(pt) {
     const s = scale(); let best = null, bd = Infinity;
-    placed().forEach((a) => { const d = Math.hypot(a.map_x - pt.x, a.map_y - pt.y) * s; if (d < bd) { bd = d; best = a; } });
-    return bd <= 26 ? best : null;   // within 26 px of the finger
+    placed().forEach((a) => {
+      const rs = roadSize(a);
+      const reach = rs ? Math.max(26, (rs[0] / 2) * s) : 26;   // a long vehicle can be tapped anywhere along it
+      const d = Math.hypot(a.map_x - pt.x, a.map_y - pt.y) * s;
+      if (d <= reach && d - reach < bd) { bd = d - reach; best = a; }
+    });
+    return best;
   }
 
   // --- card for the tapped machine
@@ -1515,10 +1551,16 @@ route('/map', async () => {
     const un = list.filter((a) => a.map_x == null).length;
     $('#medpanel').innerHTML = `<section class="card stack"><h2 style="margin:0">Place machines</h2>
       <p class="small muted" style="margin:0">${placing ? `Tap the map where <b>${esc(placing)}</b> goes.` : 'Pick a machine, then tap the map where it sits. Tapping a pin picks that machine so you can move it.'} ${un} not placed yet.</p>
-      ${placing && core.assetById[placing].map_x != null ? `<button class="btn sm danger" type="button" id="munplace" style="align-self:flex-start">Take ${esc(placing)} off the map</button>` : ''}
+      ${placing && core.assetById[placing].map_x != null ? `<div class="row" style="gap:8px">${roadSize(core.assetById[placing]) ? `<span class="small muted">Turn ${esc(placing)}:</span><button class="btn sm" type="button" data-rot="-15">⟲ 15°</button><button class="btn sm" type="button" data-rot="15">⟳ 15°</button><button class="btn sm" type="button" data-rot="90">⟳ 90°</button>` : ''}<button class="btn sm danger" type="button" id="munplace">Take ${esc(placing)} off the map</button></div>` : ''}
       <div class="row" style="gap:8px">${list.map((a) => `<button type="button" class="pill" data-place="${esc(a.id)}" aria-pressed="${a.id === placing}" title="${esc(a.name)}">${a.map_x == null ? '● ' : ''}${esc(a.id.replace(/^FUSE-/, ''))}</button>`).join('')}</div>
       <span class="tiny muted">● = not on the map yet</span></section>`;
     $$('[data-place]').forEach((b) => b.addEventListener('click', () => { placing = b.dataset.place; selected = null; showCard(); drawEditPanel(); drawPins(); const a = core.assetById[placing]; if (a.map_x != null) centerOn(a, Math.min(vb.w, 120)); }));
+    $$('[data-rot]').forEach((b) => b.addEventListener('click', () => busy(b, async () => {
+      const a = core.assetById[placing];
+      const rot = (((a.map_rot || 0) + Number(b.dataset.rot)) % 360 + 360) % 360;
+      await q(sb.from('assets').update({ map_rot: rot }).eq('id', a.id));
+      a.map_rot = rot; drawPins();
+    })));
     const un2 = $('#munplace');
     if (un2) un2.addEventListener('click', () => busy(un2, async () => {
       await q(sb.from('assets').update({ map_x: null, map_y: null }).eq('id', placing));
