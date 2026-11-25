@@ -1342,7 +1342,7 @@ const PIN = {
 // Vehicles and trailers draw as small top-down shapes at real size (feet), pointing along +x, rotated by assets.map_rot.
 // Sizes are typical overall length x width for each unit (trailers include the tongue).
 const ROAD_SIZE = {
-  'FUSE-VEH-1000': [19.5, 6.7], 'FUSE-VEH-1030': [20.5, 7.8], 'FUSE-VEH-1040': [20.5, 7.8], 'FUSE-VEH-1050': [23, 8],
+  'FUSE-VEH-1000': [19.5, 6.7], 'FUSE-VEH-1030': [20.5, 7.8], 'FUSE-VEH-1040': [20.5, 7.8], 'FUSE-VEH-1050': [24, 8],
   'FUSE-VEH-1060': [19.5, 6.9], 'FUSE-VEH-1070': [21, 6.8], 'FUSE-VEH-1080': [17.9, 7],
   'FUSE-TRL-T100': [27, 8.5], 'FUSE-TRL-T200': [22, 7], 'FUSE-TRL-T300': [20, 7.5], 'FUSE-TRL-T400': [12, 6],
   'FUSE-TRL-T500': [24, 8.5], 'FUSE-TRL-T600': [29, 8.5],
@@ -1353,12 +1353,22 @@ function roadShape(a, fill, sw) {
   const [L, W] = roadSize(a), x0 = -L / 2, y0 = -W / 2, k = 'stroke="#1C1F23" stroke-opacity=".55" stroke-width="' + sw + '"';
   if (/^FUSE-TRL-/.test(a.id)) {
     const t = Math.min(4, L * 0.18), d = L - t;   // tongue length, deck length
-    return `<path d="M${x0 + d} ${-0.5} L${L / 2} 0 L${x0 + d} ${0.5}" fill="none" ${k}/>
+    return `<path d="M${x0 + d} ${-W * 0.3} L${L / 2 - 0.4} ${-0.25} L${L / 2} 0 L${L / 2 - 0.4} ${0.25} L${x0 + d} ${W * 0.3}" fill="none" stroke="#1C1F23" stroke-width="${sw * 2.2}" stroke-linejoin="round"/>
+      <circle cx="${L / 2 - 0.3}" cy="0" r="0.45" fill="#1C1F23"/>
       <rect x="${x0}" y="${y0}" width="${d}" height="${W}" rx="0.6" fill="${fill}" ${k}/>
       ${[0.3, 0.5, 0.7].map((f) => `<line x1="${x0 + d * f}" y1="${y0}" x2="${x0 + d * f}" y2="${-y0}" stroke="#fff" stroke-opacity=".5" stroke-width="${sw}"/>`).join('')}
       <rect x="${x0 + d * 0.38}" y="${y0 - 0.5}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/><rect x="${x0 + d * 0.38}" y="${-y0}" width="${Math.min(5, d * 0.25)}" height="0.5" fill="#1C1F23"/>`;
   }
   const svc = a.asset_type === 'Service Truck';   // single cab with a service body
+  if (a.asset_type === 'Flatbed Truck') {         // regular cab with a 14 ft flatbed deck
+    const deck = Math.min(14, L * 0.6), cabL = L - deck, xc = x0 + deck;
+    return `<rect x="${x0}" y="${y0}" width="${deck}" height="${W}" rx="0.3" fill="${fill}" ${k}/>
+      ${[0.25, 0.5, 0.75].map((f) => `<line x1="${x0 + deck * f}" y1="${y0}" x2="${x0 + deck * f}" y2="${-y0}" stroke="#fff" stroke-opacity=".45" stroke-width="${sw}"/>`).join('')}
+      <rect x="${xc - 0.6}" y="${y0}" width="0.6" height="${W}" fill="#1C1F23" fill-opacity=".6"/>
+      <rect x="${xc + 0.2}" y="${y0 + 0.4}" width="${cabL - 0.2}" height="${W - 0.8}" rx="${W * 0.16}" fill="${fill}" ${k}/>
+      <rect x="${xc + cabL * 0.25}" y="${y0 + 0.9}" width="${cabL * 0.3}" height="${W - 1.8}" rx="0.4" fill="#000" fill-opacity=".15"/>
+      <rect x="${xc + cabL * 0.55}" y="${y0 + 0.9}" width="${cabL * 0.17}" height="${W - 1.8}" rx="0.5" fill="#BFE0FF" fill-opacity=".9" ${k}/>`;
+  }
   const hood = L * 0.17, cab = L * (svc ? 0.17 : a.asset_type === 'SUV' ? 0.5 : 0.3);   // hood and cab/cabin lengths; the rest is the bed / body
   const bx = x0, bl = L - hood - cab;            // bed at the back
   return `<rect x="${x0}" y="${y0}" width="${L}" height="${W}" rx="${W * 0.18}" fill="${fill}" ${k}/>
