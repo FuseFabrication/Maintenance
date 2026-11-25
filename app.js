@@ -1522,10 +1522,16 @@ route('/map', async () => {
       const top = big ? Math.max(rs[0], rs[1]) / 2 : r;
       g.innerHTML = big
         ? `<g transform="rotate(${a.map_rot || 0})">${sel ? `<rect x="${-rs[0] / 2 - 1}" y="${-rs[1] / 2 - 1}" width="${rs[0] + 2}" height="${rs[1] + 2}" rx="1.5" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}${roadShape(a, st.fill, 1.2 / s)}</g>
+        ${(() => {   // vehicle number painted on the roof/deck, along its length, never upside down
+          const rot = ((a.map_rot || 0) % 360 + 360) % 360, up = rot > 90 && rot <= 270 ? rot + 180 : rot;
+          const num = a.id.replace(/^FUSE-(VEH|TRL)-/, '');
+          const fsz = Math.max(Math.min(rs[1] * 0.62, (rs[0] * 0.8) / (num.length * 0.62)), 12 / s);   // at least 12 px on screen
+          return `<text transform="rotate(${up})" x="0" y="0" text-anchor="middle" dominant-baseline="central" font-size="${fsz}" style="font-family:Inter,Arial,sans-serif;font-weight:800;fill:#fff;paint-order:stroke;stroke:#1C1F23;stroke-width:${fsz * 0.16}px;stroke-linejoin:round">${esc(num)}</text>`;
+        })()}
         ${showLabels || sel ? `<text y="${-top - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`
         : `${sel ? `<circle r="${r * 1.9}" fill="none" stroke="#1C1F23" stroke-width="${2.5 / s}"/>` : ''}
         <circle r="${r}" fill="${st.fill}" stroke="#1C1F23" stroke-opacity=".35" stroke-width="${1.5 / s}"/>
-        ${showLabels || sel ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
+        ${showLabels || sel || rs ? `<text y="${-r - 4 / s}" text-anchor="middle" font-size="${fs}" style="font-family:Inter,Arial,sans-serif;font-weight:700;fill:#1C1F23;paint-order:stroke;stroke:#fff;stroke-width:${3 / s}px">${esc(a.id.replace(/^FUSE-/, ''))}</text>` : ''}`;
       pinLayer.appendChild(g);
     });
     drawCount();
